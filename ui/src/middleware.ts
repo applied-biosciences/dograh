@@ -20,7 +20,9 @@ async function fetchAuthProvider(): Promise<string> {
 
   try {
     const backendUrl = getServerBackendUrl();
-    const res = await fetch(`${backendUrl}/api/v1/health`);
+    const res = await fetch(`${backendUrl}/api/v1/health`, {
+      signal: AbortSignal.timeout(3000),
+    });
     if (res.ok) {
       const data = await res.json();
       // Only cache a DEFINITIVE answer from the backend. Never cache a failure:
