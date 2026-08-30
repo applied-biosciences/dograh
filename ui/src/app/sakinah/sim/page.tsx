@@ -4,18 +4,19 @@ import { Loader2, Play, Square, Volume2, VolumeX } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { SimulationResponse } from "@/client";
 import {
     startSimulationApiV1SakinahSimulationsPost,
     stopSimulationApiV1SakinahSimulationsSimulationIdStopPost,
 } from "@/client";
-import type { SimulationResponse } from "@/client";
 import { client } from "@/client/client.gen";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { resolveBrowserBackendUrl } from "@/lib/apiClient";
 import { detailFromError } from "@/lib/apiError";
 import { useAuth } from "@/lib/auth";
-import { resolveBrowserBackendUrl } from "@/lib/apiClient";
+import { compileScenarioPrompt, findScenario } from "@/lib/sakinahScenarios";
 import { cn } from "@/lib/utils";
 
 interface SimulationEvent {
@@ -52,6 +53,13 @@ export default function SakinahSimulationPage() {
     const gainRef = useRef<GainNode | null>(null);
     const nextPlayTimeRef = useRef(0);
     const transcriptRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        const scenarioId = new URLSearchParams(window.location.search).get("scenario");
+        if (!scenarioId) return;
+        const savedScenario = findScenario(window.localStorage, scenarioId);
+        if (savedScenario) setScenario(compileScenarioPrompt(savedScenario));
+    }, []);
 
     const isActive =
         simulation !== null &&
@@ -308,7 +316,15 @@ export default function SakinahSimulationPage() {
                             roleplay for this session.
                         </p>
                     </div>
-                    <Label htmlFor="sim-scenario">Scenario instructions</Label>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Label htmlFor="sim-scenario">Scenario instructions</Label>
+                        <Link
+                            href="/sakinah/scenarios"
+                            className="text-sm text-primary underline underline-offset-4"
+                        >
+                            Choose from Scenario Library
+                        </Link>
+                    </div>
                     <Textarea
                         id="sim-scenario"
                         value={scenario}
