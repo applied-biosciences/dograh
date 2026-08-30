@@ -19,6 +19,9 @@ import { useAuth } from "@/lib/auth";
 import { compileScenarioPrompt, findScenario } from "@/lib/sakinahScenarios";
 import { cn } from "@/lib/utils";
 
+import { CalmEvaluationPanel } from "./CalmEvaluationPanel";
+import type { CalmEvaluationResult, TurnEvaluation } from "./calmTypes";
+
 interface SimulationEvent {
     role: string;
     type: string;
@@ -27,10 +30,12 @@ interface SimulationEvent {
 }
 
 interface SimTurn {
+    id: string;
     role: "sakinah" | "service_user";
     text: string;
     final: boolean;
     timestamp?: string;
+    evaluation?: TurnEvaluation;
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -104,12 +109,30 @@ export default function SakinahSimulationPage() {
         }
         if (event.role !== "sakinah" && event.role !== "service_user") return;
         const role = event.role as SimTurn["role"];
+        if (event.type === "calm-evaluation") {
+            const turnId = event.payload?.turn_id as string | undefined;
+            const status = event.payload?.status as TurnEvaluation["status"] | undefined;
+            if (!turnId || !status) return;
+            setTurns((previous) => previous.map((turn) => turn.id === turnId
+                ? {
+                    ...turn,
+                    evaluation: {
+                        status,
+                        result: event.payload?.result as CalmEvaluationResult | undefined,
+                        error: event.payload?.error as string | undefined,
+                    },
+                }
+                : turn));
+            return;
+        }
         // The observer streams word/phrase-level rtf-bot-text chunks;
         // consecutive chunks from the same role form one spoken turn, closed
         // by that role's rtf-bot-stopped-speaking.
         if (event.type === "rtf-bot-text") {
             const text = ((event.payload?.text as string) ?? "").trim();
             if (!text) return;
+            const turnId = (event.payload?.turn_id as string | undefined) ??
+                `${role}-${event.timestamp ?? Date.now()}`;
             setTurns((previous) => {
                 const last = previous[previous.length - 1];
                 if (last && last.role === role && !last.final) {
@@ -121,6 +144,7 @@ export default function SakinahSimulationPage() {
                 return [
                     ...previous.map((turn) => ({ ...turn, final: true })),
                     {
+                        id: turnId,
                         role,
                         text,
                         final: false,
@@ -133,9 +157,10 @@ export default function SakinahSimulationPage() {
             return;
         }
         if (event.type === "rtf-bot-stopped-speaking") {
+            const turnId = event.payload?.turn_id as string | undefined;
             setTurns((previous) =>
                 previous.map((turn, index) =>
-                    index === previous.length - 1 && turn.role === role
+                    (turnId ? turn.id === turnId : index === previous.length - 1 && turn.role === role)
                         ? { ...turn, final: true }
                         : turn,
                 ),
@@ -394,6 +419,11 @@ export default function SakinahSimulationPage() {
                             Service User and Sakinah turns appear as they are
                             spoken.
                         </p>
+                        <p className="mt-2 max-w-2xl text-xs text-muted-foreground">
+                            CALM scores are experimental clinical-state indicators for
+                            evaluation and development. They are not validated diagnostic
+                            or predictive scores.
+                        </p>
                     </div>
                     <div
                         ref={transcriptRef}
@@ -405,9 +435,9 @@ export default function SakinahSimulationPage() {
                                 The conversation will appear here.
                             </p>
                         ) : (
-                            turns.map((turn, index) => (
+                            turns.map((turn) => (
                                 <article
-                                    key={`${turn.timestamp ?? index}-${index}`}
+                                    key={turn.id}
                                     className={cn(
                                         "rounded-lg border p-3",
                                         turn.role === "service_user"
@@ -428,6 +458,7 @@ export default function SakinahSimulationPage() {
                                     <p className="whitespace-pre-wrap text-sm leading-relaxed">
                                         {turn.text}
                                     </p>
+                                    {turn.final ? <CalmEvaluationPanel evaluation={turn.evaluation} /> : null}
                                 </article>
                             ))
                         )}
