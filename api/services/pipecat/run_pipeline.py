@@ -1118,6 +1118,29 @@ async def _run_pipeline_impl(
             await calm_prompt_callback(engine, context)
 
         calm_prompt_processor = CalmPromptProcessor(prepare_calm_prompt)
+
+    # SpatialReal avatar (host mode): open a per-run avatar session and tap
+    # bot output audio into it. Gated on the workflow's avatar_configuration
+    # (with env fallbacks). Failure never blocks the call — the session
+    # degrades to an error signal on the avatar relay WS.
+    avatar_processor = None
+    from api.services.avatar import (
+        get_or_create_avatar_session,
+        resolve_avatar_settings,
+    )
+
+    avatar_settings = resolve_avatar_settings(run_configs)
+    if avatar_settings["enabled"] and avatar_settings["mode"] == "host":
+        avatar_session = await get_or_create_avatar_session(
+            workflow_run_id, avatar_id=avatar_settings["avatar_id"]
+        )
+        if avatar_session is not None and avatar_session.started:
+            from api.services.pipecat.avatar_output_processor import (
+                AvatarOutputProcessor,
+            )
+
+            avatar_processor = AvatarOutputProcessor(avatar_session=avatar_session)
+
     if is_realtime:
         pipeline = build_realtime_pipeline(
             transport,
@@ -1129,6 +1152,7 @@ async def _run_pipeline_impl(
             pipeline_metrics_aggregator,
             voicemail_detector=voicemail_detector,
             calm_prompt_processor=calm_prompt_processor,
+            avatar_processor=avatar_processor,
         )
     else:
         pipeline = build_pipeline(
@@ -1144,6 +1168,7 @@ async def _run_pipeline_impl(
             voicemail_detector=voicemail_detector,
             recording_router=recording_router,
             calm_prompt_processor=calm_prompt_processor,
+            avatar_processor=avatar_processor,
         )
 
     # Create pipeline task with audio configuration
@@ -1254,4 +1279,7 @@ async def _run_pipeline_impl(
         # whereas engine.cleanup() runs in a pipecat event-handler task.
         await engine.close_mcp_sessions()
         await feedback_observer.cleanup()
+        from api.services.avatar import close_avatar_session
+
+        await close_avatar_session(workflow_run_id)
         logger.debug(f"Cleaned up context providers for workflow run {workflow_run_id}")
