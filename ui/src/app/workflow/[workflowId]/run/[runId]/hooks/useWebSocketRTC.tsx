@@ -19,6 +19,7 @@ interface UseWebSocketRTCProps {
     accessToken: string | null;
     initialContextVariables?: Record<string, string> | null;
     onNodeTransition?: (transition: ConversationNodeTransitionItem) => void;
+    onBotSpeakingChange?: (speaking: boolean) => void;
 }
 
 type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'failed';
@@ -39,7 +40,7 @@ const HANDLED_SERVICE_ERROR_TYPES = new Set([
     'quota_check_failed',
 ]);
 
-export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initialContextVariables, onNodeTransition }: UseWebSocketRTCProps) => {
+export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initialContextVariables, onNodeTransition, onBotSpeakingChange }: UseWebSocketRTCProps) => {
     const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('idle');
     const [connectionActive, setConnectionActive] = useState(false);
     const [isCompleted, setIsCompleted] = useState(false);
@@ -576,9 +577,11 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
 
                         // Ephemeral state signals — update refs only, no UI messages
                         case 'rtf-bot-started-speaking':
+                            onBotSpeakingChange?.(true);
                             break;
 
                         case 'rtf-bot-stopped-speaking':
+                            onBotSpeakingChange?.(false);
                             if (!firstBotSpeechCompletedRef.current) {
                                 firstBotSpeechCompletedRef.current = true;
                             }

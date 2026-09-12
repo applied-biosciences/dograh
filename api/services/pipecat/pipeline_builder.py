@@ -39,6 +39,7 @@ def build_pipeline(
     voicemail_detector=None,
     recording_router=None,
     calm_prompt_processor=None,
+    avatar_processor=None,
 ):
     """Build the main pipeline with all components.
 
@@ -90,6 +91,7 @@ def build_pipeline(
             tts,  # TTS
             transport.output(),  # Transport bot output
             AudioPathDiagnosticsProcessor(stage="output"),
+            *([avatar_processor] if avatar_processor else []),
             audio_buffer,  # AudioBufferProcessor - records both input and output audio
             assistant_context_aggregator,  # Assistant spoken responses
             pipeline_metrics_aggregator,
@@ -109,6 +111,7 @@ def build_realtime_pipeline(
     pipeline_metrics_aggregator,
     voicemail_detector=None,
     calm_prompt_processor=None,
+    avatar_processor=None,
 ):
     """Build a pipeline for realtime (speech-to-speech) LLM services.
 
@@ -152,6 +155,7 @@ def build_realtime_pipeline(
             pipeline_engine_callback_processor,
             transport.output(),
             AudioPathDiagnosticsProcessor(stage="output"),
+            *([avatar_processor] if avatar_processor else []),
             audio_buffer,
             assistant_context_aggregator,
             pipeline_metrics_aggregator,
