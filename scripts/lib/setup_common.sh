@@ -374,6 +374,7 @@ dograh_preflight_remote_init_render() {
     local nginx_workers=0
     local rendered_secret=""
     local rendered_ip=""
+    local expected_turn_external_ip=""
     local rendered_server_name=""
 
     dograh_load_env_file "$env_file"
@@ -387,7 +388,7 @@ dograh_preflight_remote_init_render() {
     turn_conf="$tmp_root/coturn/turnserver.conf"
 
     (
-        export ENVIRONMENT SERVER_IP PUBLIC_HOST PUBLIC_BASE_URL BACKEND_API_ENDPOINT MINIO_PUBLIC_ENDPOINT TURN_HOST TURN_SECRET TURN_MIN_PORT TURN_MAX_PORT FASTAPI_WORKERS
+        export ENVIRONMENT SERVER_IP PUBLIC_HOST PUBLIC_BASE_URL BACKEND_API_ENDPOINT MINIO_PUBLIC_ENDPOINT TURN_HOST TURN_SECRET TURN_EXTERNAL_IP TURN_MIN_PORT TURN_MAX_PORT FASTAPI_WORKERS
         export DOGRAH_INIT_WORKSPACE_DIR="$project_dir"
         export DOGRAH_INIT_OUTPUT_ROOT="$tmp_root"
         export DOGRAH_INIT_CERTS_DIR="$cert_dir"
@@ -407,7 +408,8 @@ dograh_preflight_remote_init_render() {
     [[ "$rendered_secret" == "$TURN_SECRET" ]] || dograh_fail "TURN_SECRET in .env does not match turnserver.conf"
 
     rendered_ip="$(sed -n 's/^external-ip=//p' "$turn_conf" | head -1)"
-    [[ "$rendered_ip" == "$SERVER_IP" ]] || dograh_fail "SERVER_IP in .env does not match turnserver.conf"
+    expected_turn_external_ip="${TURN_EXTERNAL_IP:-$SERVER_IP}"
+    [[ "$rendered_ip" == "$expected_turn_external_ip" ]] || dograh_fail "TURN_EXTERNAL_IP/SERVER_IP in .env does not match turnserver.conf"
 
     rm -rf "$tmp_root"
 }
@@ -439,7 +441,16 @@ dograh_sync_postgres_password() {
     [[ ${#compose[@]} -gt 0 ]] || compose=(docker compose)
 
     if [[ -f "$env_file" ]]; then
-        password="$(awk -F= '/^POSTGRES_PASSWORD=/{sub(/^POSTGRES_PASSWORD=/, ""); print; exit}' "$env_file")"
+        # Parse the dotenv value with shell quoting semantics. Deployment tools
+        # commonly write values as POSTGRES_PASSWORD='value'; reading the raw
+        # line with awk includes those quote characters and silently assigns a
+        # different database password than Compose passes to the API.
+        password="$(
+            set -a
+            # shellcheck disable=SC1090
+            . "$env_file"
+            printf '%s' "${POSTGRES_PASSWORD:-}"
+        )"
     fi
 
     # No explicit password: the compose fallback (`:-postgres`) governs both the
