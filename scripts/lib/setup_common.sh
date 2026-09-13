@@ -441,7 +441,16 @@ dograh_sync_postgres_password() {
     [[ ${#compose[@]} -gt 0 ]] || compose=(docker compose)
 
     if [[ -f "$env_file" ]]; then
-        password="$(awk -F= '/^POSTGRES_PASSWORD=/{sub(/^POSTGRES_PASSWORD=/, ""); print; exit}' "$env_file")"
+        # Parse the dotenv value with shell quoting semantics. Deployment tools
+        # commonly write values as POSTGRES_PASSWORD='value'; reading the raw
+        # line with awk includes those quote characters and silently assigns a
+        # different database password than Compose passes to the API.
+        password="$(
+            set -a
+            # shellcheck disable=SC1090
+            . "$env_file"
+            printf '%s' "${POSTGRES_PASSWORD:-}"
+        )"
     fi
 
     # No explicit password: the compose fallback (`:-postgres`) governs both the
