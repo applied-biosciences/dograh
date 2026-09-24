@@ -374,9 +374,10 @@ export default function AvatarEmbedPage() {
                 </div>
             ) : null}
 
-            {/* Call-ended overlay with restart */}
+            {/* Call-ended overlay with restart — anchored to the bottom so the
+                avatar's face stays visible (desktop and mobile alike). */}
             {callEnded ? (
-                <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-5 bg-black/70 backdrop-blur-sm">
+                <div className="absolute inset-0 z-30 flex flex-col items-center justify-end gap-3 bg-gradient-to-t from-black/80 via-black/25 to-transparent pb-10 max-sm:pb-6">
                     <p className="text-lg font-semibold text-white">Call ended</p>
                     <button
                         type="button"

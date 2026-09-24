@@ -9,7 +9,10 @@ const OSS_TOKEN_COOKIE = 'dograh_auth_token';
 // `/embed` serves the public website widget (e.g. /embed/dograh-widget.js),
 // which must be fetchable without a session cookie so third-party sites can
 // embed it — otherwise the middleware 307-redirects the asset to /auth/login.
-const PUBLIC_PATHS = ['/auth/login', '/auth/signup', '/embed', '/_avatarkit'];
+// `/_spatial` (and the nginx-served `/_spatial-ws`) are the first-party tunnel
+// for the SpatialReal avatar SDK — public, unauthenticated proxy paths, so the
+// middleware must not bounce them to /auth/login.
+const PUBLIC_PATHS = ['/auth/login', '/auth/signup', '/embed', '/_avatarkit', '/_spatial', '/_spatial-ws'];
 
 let cachedAuthProvider: string | null = null;
 

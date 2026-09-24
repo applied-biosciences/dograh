@@ -5,6 +5,7 @@ import { RefObject, useCallback, useEffect, useRef, useState } from 'react';
 
 import { useAppConfig } from '@/context/AppConfigContext';
 import { resolveBrowserBackendUrl } from '@/lib/apiClient';
+import { installSpatialProxy } from '@/lib/avatar/spatialProxy';
 import logger from '@/lib/logger';
 
 type AvatarKitModule = typeof import('@spatialwalk/avatarkit');
@@ -169,6 +170,11 @@ export function SpatialAvatarPanel({
 
         async function boot() {
             try {
+                // Route the SDK's spatialwalk.* traffic through our own domain
+                // (first-party) so ad/DNS filters can't block the avatar. Must
+                // run before the SDK is imported/initialized below.
+                installSpatialProxy();
+
                 const headers: Record<string, string> = { 'Content-Type': 'application/json' };
                 if (!publicSessionToken && accessToken) {
                     headers.Authorization = `Bearer ${accessToken}`;
@@ -542,10 +548,12 @@ export function SpatialAvatarPanel({
                 </div>
             ) : null}
             {state === 'gesture' ? (
+                // Whole area stays clickable, but the visible prompt sits at the
+                // bottom so the avatar's face isn't covered.
                 <button
                     type="button"
                     onClick={() => void enableAvatar()}
-                    className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-background/60 text-sm font-medium text-foreground transition-colors hover:bg-background/40"
+                    className="absolute inset-0 flex flex-col items-center justify-end gap-2 bg-gradient-to-t from-background/80 via-background/10 to-transparent pb-10 text-sm font-medium text-foreground transition-colors hover:from-background/60 max-sm:pb-6"
                 >
                     <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground">
                         <Play className="h-5 w-5" />

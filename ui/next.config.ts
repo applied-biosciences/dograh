@@ -31,6 +31,31 @@ const nextConfig: NextConfig = {
         source: "/ingest/decide",
         destination: "https://us.i.posthog.com/decide",
       },
+      // First-party tunnel for the SpatialReal avatar SDK's HTTP endpoints, so
+      // ad/DNS filters can't block the third-party hosts and kill the avatar.
+      // The browser shim (src/lib/avatar/spatialProxy.ts) rewrites the SDK's
+      // hardcoded URLs to these paths; the driving WebSocket is proxied
+      // separately by the nginx sidecar at /_spatial-ws/*.
+      {
+        source: "/_spatial/cdn/:path*",
+        destination: "https://cdn.spatialwalk.cloud/:path*",
+      },
+      {
+        source: "/_spatial/api/:path*",
+        destination: "https://api.intl.spatialwalk.cloud/:path*",
+      },
+      {
+        source: "/_spatial/config/:path*",
+        destination: "https://config.spatialwalk.top/:path*",
+      },
+      {
+        source: "/_spatial/i/:path*",
+        destination: "https://i.spatialwalk.ai/:path*",
+      },
+      {
+        source: "/_spatial/hog/:path*",
+        destination: "https://hogtool.spatialwalk.ai/:path*",
+      },
     ];
   },
   async headers() {
