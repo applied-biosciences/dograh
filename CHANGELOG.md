@@ -1,5 +1,16 @@
 # Changelog
 
+## Sakinah v1.47.0.6 (2026-09-26)
+
+- Pin each simulation role's resolved AI configuration into its pipeline start,
+  so the Service User's workflow-level TTS voice override cannot fall back to
+  the organization default while the simulation starts.
+- Clarified the Run Details storage contract: PostgreSQL holds the authorized
+  run/phone correlation, status, score snapshots and artifact references;
+  MinIO is the configured primary store for recording and transcript objects.
+  Artifact finalization remains observable through database metadata and
+  storage-audit outcomes without exposing call content.
+
 ## Sakinah v1.47.0.5 (2026-09-26)
 
 - Made the production UI image build memory-safe by skipping build-time Sentry
