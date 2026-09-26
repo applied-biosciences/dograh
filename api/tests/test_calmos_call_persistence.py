@@ -12,6 +12,7 @@ from api.db.call_persistence_client import (
     caller_identifier_hash,
     legacy_caller_identifier_hash,
     normalize_caller_identifier,
+    stored_phone_correlation_hash,
 )
 from api.db.models import MemoryModel
 from api.services.call_persistence import persist_call_data_with_retry
@@ -28,6 +29,19 @@ def test_caller_identifier_is_normalized_and_hashed_without_using_phone_as_id():
     assert caller_identifier_hash("+44201234") != legacy_caller_identifier_hash(
         "+44201234"
     )
+
+
+def test_run_details_phone_correlation_supports_legacy_sql_run_rows():
+    """Run Details remains retrievable while caller-id backfill is pending."""
+    run = SimpleNamespace(
+        caller_identifier=None,
+        telephone_number=" +44 20 1234 ",
+    )
+
+    assert stored_phone_correlation_hash(run) == caller_identifier_hash("+44201234")
+    assert stored_phone_correlation_hash(
+        SimpleNamespace(caller_identifier="+44201234", telephone_number="+4411")
+    ) == caller_identifier_hash("+44201234")
 
 
 def test_feedback_events_become_ordered_speaker_utterances():

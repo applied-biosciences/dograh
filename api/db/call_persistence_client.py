@@ -66,6 +66,20 @@ def legacy_caller_identifier_hash(identifier: str | None) -> str | None:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def stored_phone_correlation_hash(run: WorkflowRunModel) -> str | None:
+    """Return the keyed hash used to correlate a run with a supplied phone.
+
+    Newer runs point at ``caller_identifiers``.  During the migration window,
+    older rows may only have the protected SQL caller/destination field, so
+    hash that value at lookup time rather than making Run Details depend on a
+    backfill having completed.
+    """
+    return caller_identifier_hash(
+        getattr(run, "caller_identifier", None)
+        or getattr(run, "telephone_number", None)
+    )
+
+
 @dataclass(frozen=True)
 class CallerIdentityResolution:
     service_user: ServiceUserModel
@@ -902,14 +916,23 @@ class CallPersistenceClient(BaseDBClient):
                 return None
             # A phone is a second correlation factor, not an identifier that
             # can be listed or returned.  Compare the HMAC form against the
-            # linked caller identity; legacy unlinked runs cannot pass this
-            # stricter lookup and remain available only through normal
-            # authorized run-ID retrieval.
+            # linked caller identity.  Older runs (and runs created before
+            # memory context is resolved) may not have a caller-identifiers
+            # row yet, but the run creation boundary still stores the
+            # normalized source/destination in its protected SQL row.  Hash
+            # that value at lookup time so those runs remain retrievable
+            # without exposing or logging the phone number and without
+            # weakening tenant scoping.
             if phone_number is not None:
                 expected_hash = caller_identifier_hash(phone_number)
                 caller = await session.get(CallerIdentifierModel, run.caller_identifier_id)
-                if not expected_hash or caller is None or not hmac.compare_digest(
-                    caller.identifier_value_hash, expected_hash
+                stored_hash = (
+                    caller.identifier_value_hash
+                    if caller is not None
+                    else stored_phone_correlation_hash(run)
+                )
+                if not expected_hash or not stored_hash or not hmac.compare_digest(
+                    stored_hash, expected_hash
                 ):
                     return None
             recordings = await session.execute(

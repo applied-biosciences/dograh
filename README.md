@@ -11,7 +11,7 @@
 
 **The open-source, self-hostable alternative to Vapi & Retell** — build production voice agents with a visual workflow builder, test them in minutes, and let AI coding assistants help design and edit them through MCP.
 
-> **Sakinah distribution:** this checkout packages the compatible `v1.47.0.5` release, based on upstream Dograh `dograh-v1.47.0`. Production images must be built for `linux/amd64`; deployment and local smoke-test instructions are maintained in the accompanying Sakinah deployment bundle.
+> **Sakinah distribution:** this checkout packages the compatible `v1.47.0.6` release, based on upstream Dograh `dograh-v1.47.0`. Production images must be built for `linux/amd64`; deployment and local smoke-test instructions are maintained in the accompanying Sakinah deployment bundle.
 
 <p align="center">
   <a href="https://app.dograh.com">
@@ -167,7 +167,9 @@ real-time audio → STT → LLM → TTS response path.
   require the run ID plus normalized phone correlation; replay links are short
   lived and audited. If a referenced media object cannot be signed, Run Details
   still returns the SQL-backed transcript, utterances, and CALM score snapshots,
-  and identifies the unavailable track without exposing storage paths.
+  and identifies the unavailable track without exposing storage paths. During
+  the caller-identity migration, older rows use a keyed hash of their protected
+  SQL caller/destination field until the caller-identifiers row is backfilled.
 - Simulations resolve Sakinah and Service User independently against their own
   draft definitions (falling back to published when no draft exists). Their V2
   LLM/TTS settings, including voices, do not mutate or inherit from the

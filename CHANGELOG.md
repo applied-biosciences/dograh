@@ -14,6 +14,10 @@
   signed: the authorized SQL-backed transcript, utterances, and ongoing/final
   CALM scores still return with an unavailable-track indicator, rather than a
   media failure hiding the run.
+- Kept the phone-correlation lookup compatible with pre-backfill workflow rows:
+  when a caller-identifiers HMAC row is not present yet, the protected SQL
+  caller/destination field is hashed at lookup time, so an opaque run ID plus
+  the normalized phone still resolves without exposing phone data.
 
 ## Sakinah v1.47.0.5 (2026-09-26)
 
