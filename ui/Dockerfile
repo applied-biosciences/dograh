@@ -53,6 +53,10 @@ ENV NEXT_PUBLIC_BACKEND_URL="${NEXT_PUBLIC_BACKEND_URL}"
 # the Next.js type-check phase without exhausting the builder's memory.
 ARG NODE_OPTIONS="--max-old-space-size=4096"
 ENV NODE_OPTIONS="${NODE_OPTIONS}"
+# Source-map instrumentation is useful in CI but needlessly increases the
+# compiler heap on a production image build. Runtime Sentry reporting remains
+# configured through the runner environment.
+ENV DISABLE_SENTRY="1"
 RUN npm run build && \
     rm -rf /tmp/* /root/.npm /root/.next/cache
 
