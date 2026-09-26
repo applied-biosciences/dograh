@@ -1,7 +1,25 @@
 # Changelog
 
+## Sakinah v1.47.0.6 (2026-09-26)
+
+- Pin each simulation role's resolved AI configuration into its pipeline start,
+  so the Service User's workflow-level TTS voice override cannot fall back to
+  the organization default while the simulation starts.
+- Clarified the Run Details storage contract: PostgreSQL holds the authorized
+  run/phone correlation, status, score snapshots and artifact references;
+  MinIO is the configured primary store for recording and transcript objects.
+  Artifact finalization remains observable through database metadata and
+  storage-audit outcomes without exposing call content.
+- Made Run Details degrade gracefully when a MinIO/S3 recording cannot be
+  signed: the authorized SQL-backed transcript, utterances, and ongoing/final
+  CALM scores still return with an unavailable-track indicator, rather than a
+  media failure hiding the run.
+
 ## Sakinah v1.47.0.5 (2026-09-26)
 
+- Made the production UI image build memory-safe by skipping build-time Sentry
+  source-map instrumentation; runtime error reporting remains configured in
+  deployment environments.
 - Fixed HUMAIN credential-first setup: a V2 BYOK configuration can save a
   non-empty API key before a profile is selected, account voices are searchable
   descriptive choices, and a manual profile-ID override remains available. The

@@ -21,6 +21,7 @@ export function MediaPreviewDialog() {
     const [isOpen, setIsOpen] = useState(false);
     const [audioSignedUrl, setAudioSignedUrl] = useState<string | null>(null);
     const [transcriptContent, setTranscriptContent] = useState<string | null>(null);
+    const [unavailableRecordings, setUnavailableRecordings] = useState<string[]>([]);
     const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
     const [recordingKey, setRecordingKey] = useState<string | null>(null);
     const [transcriptKey, setTranscriptKey] = useState<string | null>(null);
@@ -32,6 +33,7 @@ export function MediaPreviewDialog() {
             setMediaLoading(true);
             setAudioSignedUrl(null);
             setTranscriptContent(null);
+            setUnavailableRecordings([]);
             setRecordingKey(callId ? null : recordingUrl);
             setTranscriptKey(transcriptUrl);
             setSelectedRunId(runId);
@@ -47,6 +49,7 @@ export function MediaPreviewDialog() {
                         .join('\n');
                     setAudioSignedUrl(replay.recording_signed_url ?? fallbackRecording?.signed_url ?? null);
                     setTranscriptContent(transcript || null);
+                    setUnavailableRecordings(replay.unavailable_recordings ?? []);
                     posthog.capture(PostHogEvent.TRANSCRIPT_VIEWED, {
                         run_id: runId,
                         source: 'call_replay',
@@ -130,7 +133,13 @@ export function MediaPreviewDialog() {
                         </pre>
                     )}
 
-                    {!mediaLoading && !audioSignedUrl && !transcriptContent && (
+                    {!mediaLoading && unavailableRecordings.length > 0 && (
+                        <p className="mt-4 text-sm text-muted-foreground">
+                            Recording unavailable. This does not prevent SQL-backed run details from being viewed.
+                        </p>
+                    )}
+
+                    {!mediaLoading && !audioSignedUrl && !transcriptContent && unavailableRecordings.length === 0 && (
                         <div className="flex items-center justify-center py-8 text-muted-foreground">
                             No recording or transcript available.
                         </div>
