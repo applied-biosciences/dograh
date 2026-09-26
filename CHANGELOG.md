@@ -1,5 +1,14 @@
 # Changelog
 
+## Sakinah v1.47.0.4 (2026-09-26)
+
+- Wired the HUMAIN account-profile catalogue into the voice settings UI. Discovery resolves the already-saved credential server-side, returns no key, and persists only the selected stable profile ID.
+- Made Run Details accept either its opaque call ID or native numeric workflow-run ID, require the existing phone HMAC correlation, audit access, and issue only short-lived MinIO/S3 replay URLs.
+- Preserved ongoing CALM score snapshots in the relational call-score record while simulation artifacts remain database-referenced objects in configured MinIO/S3 storage.
+- Kept Sakinah and Service User on their own latest draft (published fallback), preserving per-role TTS configuration and emitting configuration-only diagnostics.
+- Preserved `other_language` separately for scenarios whose language is `Other`; prompts now use the entered language rather than the label.
+- Bumped release metadata and UI package versions to `v1.47.0.4`.
+
 ## Sakinah v1.47.0.3 (2026-09-26)
 
 - Restored HUMAIN Voice as a V2 BYOK TTS provider, including account-profile voice discovery, credential-safe persistence, and runtime TTS selection.

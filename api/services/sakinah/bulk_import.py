@@ -251,6 +251,7 @@ def normalize_import_candidate(candidate: Any) -> dict[str, Any]:
         "age": _string_value(candidate, ("age", "service_user_age")),
         "gender": _string_value(candidate, "gender", "Not specified"),
         "language": _string_value(candidate, "language", "English"),
+        "other_language": _string_value(candidate, ("otherLanguage", "other_language")),
         "emotion": _string_value(candidate, "emotion", emotional_category or ""),
         "communication_style": _string_value(
             candidate, ("communicationStyle", "communication_style")

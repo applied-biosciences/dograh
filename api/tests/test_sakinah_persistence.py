@@ -26,6 +26,7 @@ def _scenario_payload(title: str) -> dict[str, str]:
         "age": "34",
         "gender": "Female",
         "language": "English",
+        "other_language": "",
         "emotion": "Guarded",
         "communication_style": "Short, cautious answers",
         "initial_information": "I need help with a difficult situation.",
@@ -137,6 +138,18 @@ async def test_run_summary_persists_transcript_preview_and_recording_refs(
         assert (
             await client.get(f"/api/v1/sakinah/runs/{session_id}")
         ).status_code == 404
+
+
+async def test_scenario_preserves_free_text_other_language(test_client_factory, db_session):
+    owner = await _make_user(db_session, "sakinah_other_language")
+    payload = _scenario_payload("Welsh-language scenario")
+    payload.update({"language": "Other", "other_language": "Welsh"})
+
+    async with test_client_factory(owner) as client:
+        response = await client.post("/api/v1/sakinah/scenarios", json=payload)
+        assert response.status_code == 200, response.text
+        assert response.json()["language"] == "Other"
+        assert response.json()["other_language"] == "Welsh"
 
 
 async def test_end_session_artifact_lookup_waits_for_pipeline_upload():

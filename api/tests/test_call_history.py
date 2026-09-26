@@ -55,16 +55,24 @@ async def test_call_replay_returns_short_lived_signed_url_without_storage_detail
 @pytest.mark.asyncio
 async def test_lookup_requires_authorized_run_and_phone_correlation(monkeypatch):
     class _DB:
+        audit = None
+
         async def get_call_replay_for_user(self, run_id, **kwargs):
             assert run_id == "opaque-run-id"
             assert kwargs["phone_number"] == "+44201234"
             assert kwargs["organization_id"] == 7
+            assert kwargs["allow_native_run_id"] is True
             return {"call_id": run_id, "agent_run_id": 9, "transcript": "", "utterances": [], "calm_score": {"current": 4}}
 
-    monkeypatch.setattr(call_history, "db_client", _DB())
+        async def record_audit_event(self, **kwargs):
+            self.audit = kwargs
+
+    fake_db = _DB()
+    monkeypatch.setattr(call_history, "db_client", fake_db)
     response = await call_history.lookup_run_details(
         call_history.RunDetailsLookupRequest(run_id="opaque-run-id", phone_number="+44201234"),
         user=SimpleNamespace(selected_organization_id=7, is_superuser=False),
     )
     assert response.calm_score == {"current": 4}
     assert "44201234" not in response.model_dump_json()
+    assert fake_db.audit["resource_id"] == "opaque-run-id"

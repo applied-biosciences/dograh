@@ -892,6 +892,7 @@ class SakinahScenarioModel(Base):
     age = Column(String, nullable=False, default="")
     gender = Column(String, nullable=False, default="")
     language = Column(String, nullable=False, default="")
+    other_language = Column(String, nullable=False, default="", server_default=text("''"))
     emotion = Column(String, nullable=False, default="")
     communication_style = Column(Text, nullable=False, default="")
     initial_information = Column(Text, nullable=False, default="")

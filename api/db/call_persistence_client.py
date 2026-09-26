@@ -879,12 +879,20 @@ class CallPersistenceClient(BaseDBClient):
         organization_id: int | None,
         is_superuser: bool = False,
         phone_number: str | None = None,
+        allow_native_run_id: bool = False,
     ) -> dict[str, Any] | None:
         async with self.async_session() as session:
+            # ``call_id`` remains the only accepted identifier for ordinary
+            # replay URLs.  Native numeric IDs are predictable, so only the
+            # Run Details route may opt in after it also supplies a phone-HMAC
+            # correlation factor.
+            run_identity = WorkflowRunModel.call_id == call_id
+            if allow_native_run_id and phone_number is not None and call_id.isdecimal():
+                run_identity = or_(run_identity, WorkflowRunModel.id == int(call_id))
             query = (
                 select(WorkflowRunModel)
                 .join(WorkflowModel, WorkflowRunModel.workflow_id == WorkflowModel.id)
-                .where(WorkflowRunModel.call_id == call_id)
+                .where(run_identity)
                 .options(joinedload(WorkflowRunModel.workflow))
             )
             if not is_superuser:
