@@ -20,6 +20,10 @@ from api.schemas.workflow_configurations import (
     get_default_workflow_configurations,
 )
 from api.services.auth.depends import get_user
+from api.services.humain_voice_catalog import (
+    HumainVoiceCatalogError,
+    list_humain_voices,
+)
 from api.services.configuration.ai_model_configuration import (
     convert_legacy_ai_model_configuration_to_v2,
     get_resolved_ai_model_configuration,
@@ -463,6 +467,47 @@ class VoicesResponse(BaseModel):
     provider: str
     voices: List[VoiceInfo]
     facets: Optional[VoiceFacets] = None
+
+
+class HumainVoiceCatalogRequest(BaseModel):
+    """An unsaved key is used only for this authenticated discovery request."""
+
+    api_key: str | None = Field(default=None, min_length=1)
+
+
+async def _configured_humain_api_key(organization_id: int | None) -> str | None:
+    configuration = (
+        await get_resolved_ai_model_configuration(organization_id=organization_id)
+    ).effective.tts
+    provider = getattr(getattr(configuration, "provider", None), "value", getattr(configuration, "provider", None))
+    if provider != "humain" or configuration is None:
+        return None
+    return next((key for key in configuration.get_all_api_keys() if key.strip()), None)
+
+
+@router.post("/configurations/voices/humain")
+async def list_humain_voice_catalog(
+    request: HumainVoiceCatalogRequest,
+    user: UserModel = Depends(get_user),
+) -> VoicesResponse:
+    """Discover account profiles without storing, returning, or logging a key."""
+
+    try:
+        api_key = request.api_key or await _configured_humain_api_key(
+            user.selected_organization_id
+        )
+        if not api_key:
+            raise HTTPException(
+                status_code=422,
+                detail="Enter a HUMAIN API key before loading account voices.",
+            )
+        voices = await list_humain_voices(api_key)
+    except HumainVoiceCatalogError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to load HUMAIN voices. Check the API key and try again.",
+        ) from exc
+    return VoicesResponse(provider="humain", voices=[VoiceInfo(**voice) for voice in voices])
 
 
 @router.get("/configurations/voices/{provider}")

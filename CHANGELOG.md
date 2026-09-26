@@ -1,11 +1,20 @@
 # Changelog
 
-## Sakinah v1.47.0.0 (2026-09-26)
+## Sakinah v1.47.0.3 (2026-09-26)
+
+- Restored HUMAIN Voice as a V2 BYOK TTS provider, including account-profile voice discovery, credential-safe persistence, and runtime TTS selection.
+- Made Run Details correlation tenant-scoped and privacy-preserving: callers submit an opaque run ID with a phone correlation value in a request body; stored HMAC identities are compared without exposing phone numbers in logs, listings, or responses.
+- Persisted current CALM progress throughout Sakinah simulations and retained final score summaries in relational storage. Recordings and full transcript artifacts continue to be stored by the configured MinIO/S3 backend with database references only.
+- Made both simulation roles use their own draft definition and template context when present, with published-definition fallback when no draft exists.
+- Set the day-theme background to `#E194F7`; dark-mode tokens are unchanged.
+- Bumped release metadata and UI package versions to `v1.47.0.3`.
+
+## Sakinah v1.47.0.2 (2026-09-26)
 
 - Integrated upstream Dograh `dograh-v1.47.0` while retaining the existing Sakinah avatar, CALM simulation, call-data, metadata, and listener-mode behaviour.
 - Retained the complete v1.46.0.4.x/1.46.0.5 release line: persistent call data and memory, local auth/audio fixes, MinIO/S3 artifact finalization and secondary replication, storage audit, and SpatialReal avatar support.
 - Added an Alembic merge migration so the retained Sakinah schema history, v1.46 artifact-replication schema, and upstream v1.47 migrations upgrade through one head.
-- Published the Sakinah API and release artifact version as `v1.47.0.0`; the bundled local smoke stack is intentionally separate from AWS deployment.
+- Published the Sakinah API and release artifact version as `v1.47.0.2`; the bundled local smoke stack is intentionally separate from AWS deployment.
 
 ## 1.47.0 (2026-09-15)
 

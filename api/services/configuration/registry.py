@@ -113,6 +113,7 @@ class ServiceProviders(str, Enum):
     XAI = "xai"
     LMNT = "lmnt"
     SPEECHIFY = "speechify"
+    HUMAIN = "humain"
 
 
 class BaseServiceConfiguration(BaseModel):
@@ -148,6 +149,7 @@ class BaseServiceConfiguration(BaseModel):
         ServiceProviders.XAI,
         ServiceProviders.LMNT,
         ServiceProviders.SPEECHIFY,
+        ServiceProviders.HUMAIN,
     ]
     api_key: str | list[str]
 
@@ -335,6 +337,11 @@ LMNT_PROVIDER_MODEL_CONFIG = provider_model_config("LMNT")
 SPEECHIFY_PROVIDER_MODEL_CONFIG = provider_model_config(
     "Speechify",
     provider_docs_url="https://docs.speechify.ai",
+)
+HUMAIN_PROVIDER_MODEL_CONFIG = provider_model_config(
+    "HUMAIN Voice",
+    description="HUMAIN Voice profile-based realtime text-to-speech.",
+    provider_docs_url="https://docs.voice.humain.com/en/sdk/python",
 )
 INWORLD_PROVIDER_MODEL_CONFIG = provider_model_config(
     "Inworld",
@@ -1660,6 +1667,24 @@ class LmntTTSConfiguration(BaseTTSConfiguration):
     )
 
 
+@register_tts
+class HumainTTSConfiguration(BaseTTSConfiguration):
+    """HUMAIN requires an account profile ID, never a display label."""
+
+    model_config = HUMAIN_PROVIDER_MODEL_CONFIG
+    provider: Literal[ServiceProviders.HUMAIN] = ServiceProviders.HUMAIN
+    model: str = Field(
+        default="nebula",
+        description="HUMAIN Voice TTS model.",
+        json_schema_extra={"examples": ["nebula"]},
+    )
+    voice: str = Field(
+        min_length=1,
+        description="HUMAIN account voice profile ID.",
+        json_schema_extra={"allow_custom_input": True},
+    )
+
+
 # Only the streaming-native Simba models: pipecat's SpeechifyHttpTTSService
 # uses the /v1/audio/stream/with-timestamps endpoint, which rejects the legacy
 # simba-english/simba-multilingual models.
@@ -1744,6 +1769,7 @@ TTSConfig = Annotated[
         XAITTSConfiguration,
         LmntTTSConfiguration,
         SpeechifyTTSConfiguration,
+        HumainTTSConfiguration,
     ],
     Field(discriminator="provider"),
 ]

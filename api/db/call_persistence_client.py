@@ -873,7 +873,12 @@ class CallPersistenceClient(BaseDBClient):
             return item
 
     async def get_call_replay_for_user(
-        self, call_id: str, *, organization_id: int | None, is_superuser: bool = False
+        self,
+        call_id: str,
+        *,
+        organization_id: int | None,
+        is_superuser: bool = False,
+        phone_number: str | None = None,
     ) -> dict[str, Any] | None:
         async with self.async_session() as session:
             query = (
@@ -887,6 +892,18 @@ class CallPersistenceClient(BaseDBClient):
             run = (await session.execute(query)).scalars().first()
             if run is None:
                 return None
+            # A phone is a second correlation factor, not an identifier that
+            # can be listed or returned.  Compare the HMAC form against the
+            # linked caller identity; legacy unlinked runs cannot pass this
+            # stricter lookup and remain available only through normal
+            # authorized run-ID retrieval.
+            if phone_number is not None:
+                expected_hash = caller_identifier_hash(phone_number)
+                caller = await session.get(CallerIdentifierModel, run.caller_identifier_id)
+                if not expected_hash or caller is None or not hmac.compare_digest(
+                    caller.identifier_value_hash, expected_hash
+                ):
+                    return None
             recordings = await session.execute(
                 select(CallRecordingModel)
                 .where(CallRecordingModel.agent_run_id == run.id)
@@ -902,6 +919,11 @@ class CallPersistenceClient(BaseDBClient):
                 (item for item in recording_rows if item.track == "mixed"),
                 None,
             )
+            score = (
+                await session.execute(
+                    select(CallScoreModel).where(CallScoreModel.agent_run_id == run.id)
+                )
+            ).scalars().first()
             return {
                 "call_id": run.call_id,
                 "agent_run_id": run.id,
@@ -923,6 +945,9 @@ class CallPersistenceClient(BaseDBClient):
                 ],
                 "transcript_key": run.transcript_object_key or run.transcript_url,
                 "transcript": run.full_transcript,
+                "calm_score": score.calm_score if score else {},
+                "safety_score": score.safety_score if score else {},
+                "clinical_evaluation": score.clinical_evaluation if score else {},
                 "utterances": [
                     {
                         "id": item.id,

@@ -22,6 +22,7 @@ from api.services.configuration.registry import ServiceProviders
 from api.services.pipecat.gemini_json_schema_adapter import (
     DograhGeminiJSONSchemaAdapter,
 )
+from api.services.pipecat.humain import HumainTTSService, HumainTTSSettings
 from api.services.pipecat.minimax_tts import MiniMaxOwnedSessionTTSService
 from api.utils.url_security import validate_user_configured_service_url
 from pipecat.services.assemblyai.stt import AssemblyAISTTService, AssemblyAISTTSettings
@@ -990,6 +991,17 @@ def create_tts_service(
     elif user_config.tts.provider == ServiceProviders.LMNT.value:
         raise ValueError(
             "LMNT is no longer available. Please select another TTS provider."
+        )
+    elif user_config.tts.provider == ServiceProviders.HUMAIN.value:
+        return HumainTTSService(
+            api_key=user_config.tts.api_key,
+            settings=HumainTTSSettings(
+                model=user_config.tts.model,
+                voice=user_config.tts.voice,
+            ),
+            text_filters=[xml_function_tag_filter],
+            skip_aggregator_types=["recording_router", "recording"],
+            silence_time_s=1.0,
         )
     elif user_config.tts.provider == ServiceProviders.SPEECHIFY.value:
         # SpeechifyHttpTTSService ships in upstream pipecat; imported lazily so

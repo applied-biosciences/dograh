@@ -97,6 +97,55 @@ def _scenario_dict(scenario: SakinahScenarioModel) -> dict[str, Any]:
 
 
 class SakinahPersistenceClient(BaseDBClient):
+    async def update_sakinah_run_progress(
+        self,
+        *,
+        user_id: int,
+        session_id: str,
+        calm_turns: list[dict[str, Any]],
+        preview_data: dict[str, Any],
+    ) -> SakinahRunModel | None:
+        """Durably expose in-progress CALM state to the owning user only.
+
+        The relational row owns queryable current/final score summaries.  Raw
+        transcripts and recordings remain in the configured object store.
+        """
+        async with self.async_session() as session:
+            item = (
+                await session.execute(
+                    select(SakinahRunModel)
+                    .where(
+                        SakinahRunModel.session_id == session_id,
+                        SakinahRunModel.user_id == user_id,
+                    )
+                    .with_for_update()
+                )
+            ).scalars().first()
+            if item is None:
+                return None
+            item.calm_turns = calm_turns
+            item.preview_data = {**(item.preview_data or {}), **preview_data}
+            calm_score, safety_score, clinical_evaluation = _structured_call_scores(calm_turns)
+            call_score = (
+                await session.execute(
+                    select(CallScoreModel).where(CallScoreModel.agent_run_id == item.run_id)
+                )
+            ).scalars().first()
+            if call_score is None:
+                session.add(CallScoreModel(
+                    agent_run_id=item.run_id,
+                    calm_score=calm_score,
+                    safety_score=safety_score,
+                    clinical_evaluation=clinical_evaluation,
+                ))
+            else:
+                call_score.calm_score = calm_score
+                call_score.safety_score = safety_score
+                call_score.clinical_evaluation = clinical_evaluation
+            await session.commit()
+            await session.refresh(item)
+            return item
+
     async def get_sakinah_scenarios(
         self, user_id: int, search: str | None = None
     ) -> list[dict[str, Any]]:

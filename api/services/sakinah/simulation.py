@@ -339,7 +339,13 @@ class SimulationManager:
                 # conversation start.
                 initial_context["suppress_initial_greeting"] = True
             run_inputs = await prepare_workflow_run_inputs(
-                db_client, workflow, initial_context=initial_context
+                db_client,
+                workflow,
+                initial_context=initial_context,
+                # Simulation is the same editor test path for both roles.  A
+                # missing draft deliberately falls back to the published run.
+                use_draft=True,
+                include_template_context=True,
             )
             run = await db_client.create_workflow_run(
                 f"Sakinah sim {role} {simulation_id[:8]}",
@@ -350,6 +356,35 @@ class SimulationManager:
                 organization_id=user.selected_organization_id,
                 definition_id=run_inputs.definition_id,
                 initial_context=run_inputs.initial_context,
+            )
+            # This is deliberately configuration metadata only.  It gives an
+            # operator enough evidence to diagnose a role-specific override
+            # without ever serialising credentials or the rest of the config.
+            from api.services.configuration.ai_model_configuration import (
+                get_effective_ai_model_configuration_for_workflow,
+            )
+
+            persisted_run = await db_client.get_workflow_run(
+                run.id, organization_id=user.selected_organization_id
+            )
+            definition = getattr(persisted_run, "definition", None)
+            workflow_configurations = (
+                definition.workflow_configurations if definition else {}
+            ) or {}
+            effective = await get_effective_ai_model_configuration_for_workflow(
+                organization_id=user.selected_organization_id,
+                workflow_configurations=workflow_configurations,
+            )
+            tts = effective.tts
+            logger.info(
+                "Simulation role={} workflow_id={} definition_id={} "
+                "tts_provider={} tts_model={} tts_voice={}",
+                role,
+                workflow.id,
+                run_inputs.definition_id,
+                getattr(getattr(tts, "provider", None), "value", getattr(tts, "provider", None)),
+                getattr(tts, "model", None),
+                getattr(tts, "voice", None),
             )
             simulation.agents[role] = SimulationAgent(
                 role=role,
@@ -456,6 +491,20 @@ class SimulationManager:
                 latest_utterance,
                 conversation_context=conversation_context,
             )
+            # A running simulation must not hold CALM state only in process
+            # memory: it is needed by the authorized Run Details view after a
+            # reconnect or worker restart.  Store structured scores only, not
+            # the prompt/transcript that produced them.
+            if simulation.user_id is not None:
+                await db_client.update_sakinah_run_progress(
+                    user_id=simulation.user_id,
+                    session_id=simulation.id,
+                    calm_turns=simulation.calm_runtime.turns,
+                    preview_data={
+                        "calm_scores": simulation.snapshot()["calm_scores"],
+                        "calm_trend": simulation.snapshot()["calm_trend"],
+                    },
+                )
             # Analysis is applied only to Sakinah's LLM. The service-user
             # workflow has its own context and never receives this callback.
             await engine._update_llm_context(turn["prompt_sent_to_llm"], [])
