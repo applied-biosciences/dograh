@@ -2,6 +2,9 @@
 
 ## Sakinah v1.47.0.5 (2026-09-26)
 
+- Made the production UI image build memory-safe by skipping build-time Sentry
+  source-map instrumentation; runtime error reporting remains configured in
+  deployment environments.
 - Fixed HUMAIN credential-first setup: a V2 BYOK configuration can save a
   non-empty API key before a profile is selected, account voices are searchable
   descriptive choices, and a manual profile-ID override remains available. The
