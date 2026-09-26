@@ -13,6 +13,8 @@ export interface CallReplay {
         track: string;
         signed_url: string;
     }>;
+    /** SQL-backed details remain available when a recording object cannot be replayed. */
+    unavailable_recordings?: string[];
     utterances: Array<{
         id: string;
         speaker: string;

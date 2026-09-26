@@ -79,11 +79,16 @@ class SimulationAgent:
         workflow_id: int,
         workflow_run_id: int,
         transport: InternalTransport,
+        resolved_user_config: Any | None = None,
     ):
         self.role = role
         self.workflow_id = workflow_id
         self.workflow_run_id = workflow_run_id
         self.transport = transport
+        # Pin the role's resolved configuration for the lifetime of this run.
+        # This prevents a Service User voice override being replaced by the
+        # organization default during asynchronous pipeline startup.
+        self.resolved_user_config = resolved_user_config
         self.pipeline_task: Optional[asyncio.Task] = None
 
 
@@ -391,6 +396,7 @@ class SimulationManager:
                 workflow_id=workflow.id,
                 workflow_run_id=run.id,
                 transport=transport,
+                resolved_user_config=effective,
             )
 
         # Authorize both runs before any billable runtime starts (mirrors the
@@ -727,6 +733,7 @@ class SimulationManager:
                 audio_config=audio_config,
                 user_provider_id=str(user.provider_id),
                 organization_id=simulation.organization_id,
+                resolved_user_config=agent.resolved_user_config,
                 calm_prompt_callback=(
                     self._make_calm_prompt_callback(simulation)
                     if agent.role == SAKINAH_ROLE

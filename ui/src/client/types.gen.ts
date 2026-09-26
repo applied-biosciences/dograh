@@ -1103,6 +1103,10 @@ export type CallReplayResponse = {
      * Recordings
      */
     recordings?: Array<RecordingReplayTrack>;
+    /**
+     * Unavailable Recordings
+     */
+    unavailable_recordings?: Array<string>;
 };
 
 /**

@@ -1,5 +1,6 @@
 api/.env
 .git
+**/._*
 .github
 .claude
 **/.claude

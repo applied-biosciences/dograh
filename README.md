@@ -1,6 +1,6 @@
 # Dograh AI
 
-> **CALMOS Connect / Sakinah v1.47.0.5** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): integrates upstream Dograh v1.47 while retaining the full v1.46.0.4.x/1.46.0.5 white-label line: the Sakinah Scenario Console, AI-to-AI simulation, durable call and storage persistence, privacy-controlled memory, artifact replication, SpatialReal avatars, and scenario search. v1.47.0.5 repairs HUMAIN credential-first voice setup while retaining durable in-progress CALM scores and phone-correlated Run Details with short-lived MinIO/S3 replay links. See [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
+> **CALMOS Connect / Sakinah v1.47.0.6** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): retains durable in-progress CALM scores and phone-correlated Run Details with database-backed artifact references and short-lived MinIO/S3 replay links. Simulation roles pin their independently resolved configuration at startup, including the Service User's workflow-level TTS voice override. See [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
 > **Deployment limitation**: run the API with a **single worker** (`FASTAPI_WORKERS=1`, the default). Simulations keep in-process state, so with multiple workers the simulation status/stop endpoints and the transcript/audio WebSockets intermittently land on a worker that doesn't own the simulation ([#4](https://github.com/applied-biosciences/dograh/issues/4)).
 
 <p align="center">
@@ -165,7 +165,9 @@ real-time audio → STT → LLM → TTS response path.
   scores; configured private MinIO or S3 stores recording/transcript objects,
   with database references. Authorized lookups are tenant-scoped and
   require the run ID plus normalized phone correlation; replay links are short
-  lived and audited.
+  lived and audited. If a referenced media object cannot be signed, Run Details
+  still returns the SQL-backed transcript, utterances, and CALM score snapshots,
+  and identifies the unavailable track without exposing storage paths.
 - Simulations resolve Sakinah and Service User independently against their own
   draft definitions (falling back to published when no draft exists). Their V2
   LLM/TTS settings, including voices, do not mutate or inherit from the
