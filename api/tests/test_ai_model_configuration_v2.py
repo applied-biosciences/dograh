@@ -34,7 +34,30 @@ from api.services.configuration.registry import (
     GoogleRealtimeLLMConfiguration,
     OpenAIEmbeddingsConfiguration,
     OpenAILLMService,
+    HumainTTSConfiguration,
 )
+
+
+def test_humain_v2_voice_is_persisted_and_compiled_for_runtime():
+    configuration = OrganizationAIModelConfigurationV2.model_validate(
+        {
+            "mode": "byok",
+            "byok": {
+                "mode": "pipeline",
+                "pipeline": {
+                    "llm": {"provider": "openai", "api_key": "llm-key", "model": "gpt-4.1-mini"},
+                    "stt": {"provider": "deepgram", "api_key": "stt-key", "model": "nova-3-general"},
+                    "tts": {"provider": "humain", "api_key": "tts-key", "model": "nebula", "voice": "profile-123"},
+                },
+            },
+        }
+    )
+    persisted = configuration.model_dump(mode="json")
+    rehydrated = OrganizationAIModelConfigurationV2.model_validate(persisted)
+    effective = compile_ai_model_configuration_v2(rehydrated)
+    assert effective.tts.provider == "humain"
+    assert effective.tts.voice == "profile-123"
+    assert HumainTTSConfiguration.model_validate(persisted["byok"]["pipeline"]["tts"]).voice == "profile-123"
 
 
 def test_dograh_v2_compiles_to_effective_managed_pipeline_with_embeddings():

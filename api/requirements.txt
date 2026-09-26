@@ -26,3 +26,4 @@ PyNaCl==1.6.2
 # extra provides client-side Ogg Opus encoding so the relay can carry
 # playable audio to the browser; needs libopus0 at runtime (see Dockerfile).
 avatarkit[opus]==0.1.7
+humain-voice==0.18.0

@@ -25,6 +25,16 @@ class CallReplayResponse(BaseModel):
     transcript: str | None = None
     utterances: list[dict[str, Any]] = Field(default_factory=list)
     recordings: list[RecordingReplayTrack] = Field(default_factory=list)
+    calm_score: dict[str, Any] = Field(default_factory=dict)
+    safety_score: dict[str, Any] = Field(default_factory=dict)
+    clinical_evaluation: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunDetailsLookupRequest(BaseModel):
+    """Narrow lookup: callers provide both opaque run ID and their phone."""
+
+    run_id: str = Field(min_length=1, max_length=64)
+    phone_number: str = Field(min_length=3, max_length=64)
 
 
 @router.get("/{call_id}/replay", response_model=CallReplayResponse)
@@ -100,4 +110,36 @@ async def get_call_replay(
         transcript=record.get("transcript"),
         utterances=record.get("utterances", []),
         recordings=signed_tracks,
+        calm_score=record.get("calm_score") or {},
+        safety_score=record.get("safety_score") or {},
+        clinical_evaluation=record.get("clinical_evaluation") or {},
+    )
+
+
+@router.post("/lookup", response_model=CallReplayResponse)
+async def lookup_run_details(
+    request: RunDetailsLookupRequest,
+    user=Depends(get_user),
+) -> CallReplayResponse:
+    """Resolve one authorized run by its opaque ID and phone correlation.
+
+    The phone never appears in logs, responses, URLs, or broad listing APIs.
+    Returning 404 for mismatch avoids turning this endpoint into an oracle.
+    """
+    record = await db_client.get_call_replay_for_user(
+        request.run_id,
+        phone_number=request.phone_number,
+        organization_id=user.selected_organization_id,
+        is_superuser=user.is_superuser,
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="Call not found")
+    return CallReplayResponse(
+        call_id=record["call_id"],
+        agent_run_id=record["agent_run_id"],
+        transcript=record.get("transcript"),
+        utterances=record.get("utterances", []),
+        calm_score=record.get("calm_score") or {},
+        safety_score=record.get("safety_score") or {},
+        clinical_evaluation=record.get("clinical_evaluation") or {},
     )
