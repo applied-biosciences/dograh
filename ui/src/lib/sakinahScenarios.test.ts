@@ -34,10 +34,29 @@ describe("Sakinah scenario helpers", () => {
         expect(prompt).not.toContain("Age:");
     });
 
+    it("uses the explicit other-language field instead of the Other label", () => {
+        const scenario = createScenario({
+            ...EMPTY_SCENARIO_DRAFT,
+            title: "Welsh support",
+            persona: "A Welsh-speaking service user.",
+            language: "Other",
+            otherLanguage: "Welsh",
+            behaviour: "Responds in Welsh.",
+        }, [], "2026-01-01T00:00:00.000Z");
+        expect(compileScenarioPrompt(scenario)).toContain("Language: Welsh");
+        expect(compileScenarioPrompt(scenario)).not.toContain("Language: Other");
+    });
+
     it("handles malformed stored data safely", () => {
         expect(parseStoredScenarios("not-json")).toEqual([]);
         expect(parseStoredScenarios('{"unexpected":true}')).toEqual([]);
         expect(parseStoredScenarios('[{"id":"incomplete"}]')).toEqual([]);
+    });
+
+    it("keeps legacy locally stored scenarios readable without an other-language field", () => {
+        const legacy = createScenario({ ...EMPTY_SCENARIO_DRAFT, title: "Legacy" }, [], "2026-01-01T00:00:00.000Z");
+        const { otherLanguage: _discarded, ...oldShape } = legacy;
+        expect(parseStoredScenarios(JSON.stringify([oldShape]))[0].otherLanguage).toBe("");
     });
 
     it("matches partial names, categories, tags, and scenario text case-insensitively", () => {

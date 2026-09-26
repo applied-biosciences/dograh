@@ -6084,6 +6084,10 @@ export type ScenarioResponse = {
      */
     language?: string;
     /**
+     * Other Language
+     */
+    other_language?: string;
+    /**
      * Emotion
      */
     emotion?: string;
@@ -6177,6 +6181,10 @@ export type ScenarioWriteRequest = {
      * Language
      */
     language?: string;
+    /**
+     * Other Language
+     */
+    other_language?: string;
     /**
      * Emotion
      */

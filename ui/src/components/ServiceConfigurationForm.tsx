@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { VoiceSelector } from "@/components/VoiceSelector";
+import { HumainVoiceSelector } from "@/components/HumainVoiceSelector";
 import { LANGUAGE_DISPLAY_NAMES } from "@/constants/languages";
 import { useUserConfig } from "@/context/UserConfigContext";
 import type { ModelOverrides } from "@/types/workflow-configurations";
@@ -742,6 +743,13 @@ export function ServiceConfigurationForm({
             watch(`${service}_model`) as string | undefined,
         );
         const numberSchema = getNumberSchema(actualSchema);
+
+        if (service === "tts" && field === "voice" && serviceProviders.tts === "humain") {
+            return <HumainVoiceSelector
+                value={watch(`${service}_${field}`) as string || ""}
+                onChange={(voiceId) => setValue(`${service}_${field}`, voiceId, { shouldDirty: true })}
+            />;
+        }
 
         if (service === "tts" && field === "voice" && !actualSchema?.allow_custom_input) {
             if (!dropdownOptions) {

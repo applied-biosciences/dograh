@@ -95,6 +95,7 @@ def _scenario_response(value: dict[str, Any]) -> ScenarioResponse:
         age=value["age"],
         gender=value["gender"],
         language=value["language"],
+        other_language=value.get("otherLanguage", ""),
         emotion=value["emotion"],
         communication_style=value["communicationStyle"],
         initial_information=value["initialInformation"],
