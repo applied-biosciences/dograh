@@ -993,6 +993,11 @@ def create_tts_service(
             "LMNT is no longer available. Please select another TTS provider."
         )
     elif user_config.tts.provider == ServiceProviders.HUMAIN.value:
+        if not user_config.tts.voice:
+            raise ValueError(
+                "A HUMAIN voice profile is required before starting a call. "
+                "Choose an account voice or enter its profile ID."
+            )
         return HumainTTSService(
             api_key=user_config.tts.api_key,
             settings=HumainTTSSettings(
