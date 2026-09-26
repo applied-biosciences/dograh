@@ -165,7 +165,9 @@ real-time audio → STT → LLM → TTS response path.
   scores; configured private MinIO or S3 stores recording/transcript objects,
   with database references. Authorized lookups are tenant-scoped and
   require the run ID plus normalized phone correlation; replay links are short
-  lived and audited.
+  lived and audited. If a referenced media object cannot be signed, Run Details
+  still returns the SQL-backed transcript, utterances, and CALM score snapshots,
+  and identifies the unavailable track without exposing storage paths.
 - Simulations resolve Sakinah and Service User independently against their own
   draft definitions (falling back to published when no draft exists). Their V2
   LLM/TTS settings, including voices, do not mutate or inherit from the

@@ -10,6 +10,10 @@
   MinIO is the configured primary store for recording and transcript objects.
   Artifact finalization remains observable through database metadata and
   storage-audit outcomes without exposing call content.
+- Made Run Details degrade gracefully when a MinIO/S3 recording cannot be
+  signed: the authorized SQL-backed transcript, utterances, and ongoing/final
+  CALM scores still return with an unavailable-track indicator, rather than a
+  media failure hiding the run.
 
 ## Sakinah v1.47.0.5 (2026-09-26)
 

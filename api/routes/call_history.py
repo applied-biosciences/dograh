@@ -25,6 +25,7 @@ class CallReplayResponse(BaseModel):
     transcript: str | None = None
     utterances: list[dict[str, Any]] = Field(default_factory=list)
     recordings: list[RecordingReplayTrack] = Field(default_factory=list)
+    unavailable_recordings: list[str] = Field(default_factory=list)
     calm_score: dict[str, Any] = Field(default_factory=dict)
     safety_score: dict[str, Any] = Field(default_factory=dict)
     clinical_evaluation: dict[str, Any] = Field(default_factory=dict)
@@ -43,6 +44,7 @@ async def _build_replay_response(
     """Issue short-lived object URLs only after the scoped DB lookup succeeds."""
     signed_url = None
     signed_tracks: list[RecordingReplayTrack] = []
+    unavailable_tracks: list[str] = []
     recording_rows = record.get("recordings") or []
     if not recording_rows and record.get("recording_key"):
         recording_rows = [{
@@ -51,16 +53,29 @@ async def _build_replay_response(
             "recording_key": record["recording_key"],
         }]
     for recording in recording_rows:
-        backend = recording.get("storage_backend")
-        storage = get_storage_for_backend(backend) if backend else storage_fs
-        track_url = await storage.aget_signed_url(
-            recording["recording_key"], expiration=expires_in, force_inline=True
-        )
+        track = recording.get("track") or "mixed"
+        track = "assistant" if track == "bot" else track
+        recording_key = recording.get("recording_key")
+        track_url = None
+        if recording_key:
+            try:
+                backend = recording.get("storage_backend")
+                storage = get_storage_for_backend(backend) if backend else storage_fs
+                track_url = await storage.aget_signed_url(
+                    recording_key, expiration=expires_in, force_inline=True
+                )
+            except Exception:
+                track_url = None
+
+        # Media is optional for Run Details. The authorized SQL record remains
+        # useful when an object was deleted, is being replicated, or its store
+        # is temporarily unavailable.
         if not track_url:
-            raise HTTPException(status_code=503, detail="Recording is temporarily unavailable")
-        track = "assistant" if recording.get("track") == "bot" else recording.get("track")
+            if track not in unavailable_tracks:
+                unavailable_tracks.append(track)
+            continue
         signed_tracks.append(RecordingReplayTrack(track=track, signed_url=track_url))
-        if recording.get("track") == "mixed":
+        if track == "mixed":
             signed_url = track_url
 
     try:
@@ -72,8 +87,12 @@ async def _build_replay_response(
             event_type="recording_replay_url_issued",
             resource_type="workflow_run",
             resource_id=record["call_id"],
-            outcome="success",
-            event_metadata={"expires_in": expires_in, "tracks": [item.track for item in signed_tracks]},
+            outcome="partial" if unavailable_tracks else "success",
+            event_metadata={
+                "expires_in": expires_in,
+                "tracks": [item.track for item in signed_tracks],
+                "unavailable_tracks": unavailable_tracks,
+            },
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Replay auditing is temporarily unavailable") from exc
@@ -86,6 +105,7 @@ async def _build_replay_response(
         transcript=record.get("transcript"),
         utterances=record.get("utterances", []),
         recordings=signed_tracks,
+        unavailable_recordings=unavailable_tracks,
         calm_score=record.get("calm_score") or {},
         safety_score=record.get("safety_score") or {},
         clinical_evaluation=record.get("clinical_evaluation") or {},
