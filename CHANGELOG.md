@@ -1,5 +1,24 @@
 # Changelog
 
+## Sakinah v1.47.0.5 (2026-09-26)
+
+- Fixed HUMAIN credential-first setup: a V2 BYOK configuration can save a
+  non-empty API key before a profile is selected, account voices are searchable
+  descriptive choices, and a manual profile-ID override remains available. The
+  runtime rejects an unselected HUMAIN voice before a call starts.
+- Reconfirmed the existing Run Details contract: `workflow_runs` plus related
+  PostgreSQL rows are canonical for queryable status, identifiers, CALM
+  snapshots and final scores; private MinIO/S3 holds large artifacts through
+  database references. Tenant-scoped run-ID/phone-HMAC retrieval returns 404
+  for missing or unauthorized correlations.
+- Retained the v1.47 simulation fix: Sakinah and Service User each resolve
+  draft configuration and template context independently, with published
+  fallback and configuration-only diagnostics. No organization configuration is
+  mutated. Existing rows need no schema backfill; an operator investigating
+  orphaned objects should reconcile their opaque key metadata with the
+  deployment's retained run identifiers before creating any database row.
+- Bumped application, UI lockfile/package, and Helm app metadata to `v1.47.0.5`.
+
 ## Sakinah v1.47.0.4 (2026-09-26)
 
 - Wired the HUMAIN account-profile catalogue into the voice settings UI. Discovery resolves the already-saved credential server-side, returns no key, and persists only the selected stable profile ID.

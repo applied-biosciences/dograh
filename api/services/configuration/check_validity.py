@@ -70,6 +70,7 @@ class UserConfigurationValidator:
             ServiceProviders.XAI.value: self._check_xai_api_key,
             ServiceProviders.LMNT.value: self._check_lmnt_api_key,
             ServiceProviders.SPEECHIFY.value: self._check_speechify_api_key,
+            ServiceProviders.HUMAIN.value: self._check_humain_api_key,
         }
 
     async def validate(
@@ -244,6 +245,17 @@ class UserConfigurationValidator:
         ):
             return validator(provider, api_key, service_config)
         return validator(provider, api_key)
+
+    @staticmethod
+    def _check_humain_api_key(_provider: str, api_key: str) -> bool:
+        """Accept a non-empty HUMAIN key without requiring a voice profile.
+
+        HUMAIN does not expose a lightweight key-only validation endpoint in
+        the runtime SDK.  Voice discovery is the authoritative validation and
+        happens through the authenticated server-side catalogue endpoint.
+        This deliberately does not log, return, or otherwise expose the key.
+        """
+        return bool(api_key and api_key.strip())
 
     def _check_openai_api_key(
         self, model: str, api_key: str, service_config: Optional[ServiceConfig] = None

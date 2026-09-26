@@ -1,6 +1,6 @@
 # Dograh AI
 
-> **CALMOS Connect / Sakinah v1.47.0.4** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): integrates upstream Dograh v1.47 while retaining the full v1.46.0.4.x/1.46.0.5 white-label line: the Sakinah Scenario Console, AI-to-AI simulation, durable call and storage persistence, privacy-controlled memory, artifact replication, SpatialReal avatars, and scenario search. v1.47.0.4 adds safe HUMAIN profile selection, durable in-progress CALM scores, and phone-correlated Run Details with short-lived MinIO/S3 replay links. See [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
+> **CALMOS Connect / Sakinah v1.47.0.5** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): integrates upstream Dograh v1.47 while retaining the full v1.46.0.4.x/1.46.0.5 white-label line: the Sakinah Scenario Console, AI-to-AI simulation, durable call and storage persistence, privacy-controlled memory, artifact replication, SpatialReal avatars, and scenario search. v1.47.0.5 repairs HUMAIN credential-first voice setup while retaining durable in-progress CALM scores and phone-correlated Run Details with short-lived MinIO/S3 replay links. See [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
 > **Deployment limitation**: run the API with a **single worker** (`FASTAPI_WORKERS=1`, the default). Simulations keep in-process state, so with multiple workers the simulation status/stop endpoints and the transcript/audio WebSockets intermittently land on a worker that doesn't own the simulation ([#4](https://github.com/applied-biosciences/dograh/issues/4)).
 
 <p align="center">
@@ -11,7 +11,7 @@
 
 **The open-source, self-hostable alternative to Vapi & Retell** — build production voice agents with a visual workflow builder, test them in minutes, and let AI coding assistants help design and edit them through MCP.
 
-> **Sakinah distribution:** this checkout packages the compatible `v1.47.0.4` release, based on upstream Dograh `dograh-v1.47.0`. Production images must be built for `linux/amd64`; deployment and local smoke-test instructions are maintained in the accompanying Sakinah deployment bundle.
+> **Sakinah distribution:** this checkout packages the compatible `v1.47.0.5` release, based on upstream Dograh `dograh-v1.47.0`. Production images must be built for `linux/amd64`; deployment and local smoke-test instructions are maintained in the accompanying Sakinah deployment bundle.
 
 <p align="center">
   <a href="https://app.dograh.com">
@@ -132,8 +132,8 @@ curl -o docker-compose.yaml https://raw.githubusercontent.com/dograh-hq/dograh/m
 
 ## CALMOS / Sakinah Scenario Console
 
-CALMOS Connect v1.46.0.4.2.D includes the Sakinah Scenario Console at `/sakinah` and
-its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
+CALMOS Connect includes the Sakinah Scenario Console at `/sakinah` and its
+AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
 
 - Durable Agent Runs/Call History records for active and completed calls,
   including transcripts, utterances, scores, events, latency, and provider
@@ -152,6 +152,24 @@ Both consoles show durable run history with conversation previews and signed
 download controls for available recordings and transcripts. Call persistence
 and memory extraction are asynchronous so long-term storage is not on the
 real-time audio → STT → LLM → TTS response path.
+
+### HUMAIN voices, Run Details, and simulation configuration
+
+- To configure HUMAIN, save the BYOK provider and API key first; then use
+  **Load HUMAIN account voices** to search descriptive account-profile names
+  and save the selected stable profile ID. **Enter profile ID** remains a
+  supported override for an ID that is not in the returned list. Credentials
+  are resolved server-side and are never returned to the browser.
+- `workflow_runs` remains the single source of truth for Run Details. PostgreSQL
+  stores run identifiers, status, metadata, utterances, and ongoing/final CALM
+  scores; configured private MinIO or S3 stores recording/transcript objects,
+  with database references. Authorized lookups are tenant-scoped and
+  require the run ID plus normalized phone correlation; replay links are short
+  lived and audited.
+- Simulations resolve Sakinah and Service User independently against their own
+  draft definitions (falling back to published when no draft exists). Their V2
+  LLM/TTS settings, including voices, do not mutate or inherit from the
+  organization configuration or each other.
 
 Administrators can open `/sakinah/scenarios` to bulk-import scenario JSON files
 from a ZIP or from multiple individual files. The importer validates every JSON

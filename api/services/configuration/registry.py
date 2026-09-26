@@ -1669,7 +1669,12 @@ class LmntTTSConfiguration(BaseTTSConfiguration):
 
 @register_tts
 class HumainTTSConfiguration(BaseTTSConfiguration):
-    """HUMAIN requires an account profile ID, never a display label."""
+    """HUMAIN uses an account profile ID, never a display label.
+
+    A credential may be saved before an account profile is selected.  That is
+    intentional: profile discovery itself needs the persisted credential.
+    Runtime creation still rejects an empty voice before a call can start.
+    """
 
     model_config = HUMAIN_PROVIDER_MODEL_CONFIG
     provider: Literal[ServiceProviders.HUMAIN] = ServiceProviders.HUMAIN
@@ -1679,8 +1684,11 @@ class HumainTTSConfiguration(BaseTTSConfiguration):
         json_schema_extra={"examples": ["nebula"]},
     )
     voice: str = Field(
-        min_length=1,
-        description="HUMAIN account voice profile ID.",
+        default="",
+        description=(
+            "HUMAIN account voice profile ID. Save a key first, then choose "
+            "a profile from the account list or enter an ID manually."
+        ),
         json_schema_extra={"allow_custom_input": True},
     )
 

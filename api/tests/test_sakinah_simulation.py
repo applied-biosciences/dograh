@@ -408,7 +408,8 @@ async def test_initial_greeting_gated_by_suppress_flag(suppress_greeting):
     engine._call_context_vars = (
         {"suppress_initial_greeting": True} if suppress_greeting else {}
     )
-    engine.workflow.start_node_id = "start"
+    engine.active_agent.workflow.start_node_id = "start"
+    engine.start_initial_agent = AsyncMock(return_value=True)
     engine.set_node = AsyncMock()
     engine.queue_node_opening = AsyncMock()
 
@@ -424,6 +425,7 @@ async def test_initial_greeting_gated_by_suppress_flag(suppress_greeting):
         in_memory_logs_buffer=MagicMock(),
         transcript_log_coordinator=MagicMock(),
         pipeline_metrics_aggregator=MagicMock(),
+        termination_funnel=MagicMock(),
         audio_config=AudioConfig(
             transport_in_sample_rate=16000, transport_out_sample_rate=16000
         ),

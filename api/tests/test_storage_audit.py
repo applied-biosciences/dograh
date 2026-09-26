@@ -133,6 +133,11 @@ async def test_finalization_audit_reports_actual_minio_and_postgres_results(monk
         AsyncMock(),
     )
     monkeypatch.setattr(
+        workflow_run_artifacts.db_client,
+        "upsert_artifact_replication_status",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
         workflow_run_artifacts,
         "_log_storage_audit",
         events.append,
@@ -171,7 +176,7 @@ async def test_finalization_audit_reports_partial_storage_failure(monkeypatch):
         bucket_name = "voice-audio"
 
         async def acreate_file_from_bytes(self, key, data):
-            return not key.endswith("assistant.wav")
+            return not key.endswith("bot.wav")
 
     monkeypatch.setattr(workflow_run_artifacts, "storage_fs", _PartiallyFailingStorage())
     monkeypatch.setattr(
@@ -196,6 +201,11 @@ async def test_finalization_audit_reports_partial_storage_failure(monkeypatch):
         AsyncMock(),
     )
     monkeypatch.setattr(
+        workflow_run_artifacts.db_client,
+        "upsert_artifact_replication_status",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
         workflow_run_artifacts,
         "_log_storage_audit",
         events.append,
@@ -210,7 +220,7 @@ async def test_finalization_audit_reports_partial_storage_failure(monkeypatch):
     assert audit["recordings"]["status"] == "partial"
     assert audit["overall_status"] == "partial"
     assert any(
-        item["object_key"].endswith("assistant.wav")
+        item["object_key"].endswith("bot.wav")
         and item["status"] == "failed"
         for item in events[0]["recordings"]["objects"]
     )
