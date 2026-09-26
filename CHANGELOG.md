@@ -1,5 +1,12 @@
 # Changelog
 
+## Sakinah v1.47.0.7 (2026-09-26)
+
+- Promoted the v1.47.0.7 release to the `Dograh` AWS EC2 deployment and
+  configured the canonical public endpoint as `https://voice.calmos.io`.
+- Kept the API on one worker for in-process Sakinah simulation state and
+  verified the remote Docker Compose health path after the update.
+
 ## Sakinah v1.47.0.6 (2026-09-26)
 
 - Pin each simulation role's resolved AI configuration into its pipeline start,
