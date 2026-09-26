@@ -2,8 +2,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
 import { getServerBackendUrl } from '@/lib/apiClient';
-
-const OSS_TOKEN_COOKIE = 'dograh_auth_token';
+import { OSS_TOKEN_COOKIE } from '@/lib/auth/cookies';
 
 // Paths that don't require authentication in OSS mode.
 // `/embed` serves the public website widget (e.g. /embed/dograh-widget.js),
@@ -20,11 +19,7 @@ async function fetchAuthProvider(): Promise<string> {
 
   try {
     const backendUrl = getServerBackendUrl();
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
-    const res = await fetch(`${backendUrl}/api/v1/health`, {
-      signal: controller.signal,
-    }).finally(() => clearTimeout(timeout));
+    const res = await fetch(`${backendUrl}/api/v1/health`);
     if (res.ok) {
       const data = await res.json();
       // Only cache a DEFINITIVE answer from the backend. Never cache a failure:

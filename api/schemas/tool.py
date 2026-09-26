@@ -17,6 +17,7 @@ from api.enums import ToolCategory
 
 DEFAULT_MCP_TIMEOUT_SECS = 30
 DEFAULT_MCP_SSE_READ_TIMEOUT_SECS = 300
+MAX_TRANSFER_CALL_DISPOSITION_LENGTH = 64
 
 ToolParameterType = Literal["string", "number", "boolean", "object", "array"]
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
@@ -24,6 +25,7 @@ ToolCategoryValue = Literal[
     "http_api",
     "end_call",
     "transfer_call",
+    "transfer_agent",
     "calculator",
     "native",
     "integration",
@@ -393,6 +395,14 @@ class TransferCallConfig(BaseModel):
         le=120,
         description="Maximum seconds to wait for the destination to answer.",
     )
+    call_disposition: str | None = Field(
+        default=None,
+        max_length=MAX_TRANSFER_CALL_DISPOSITION_LENGTH,
+        description=(
+            "Optional disposition to record after a successful transfer. When "
+            "omitted, Dograh records its provider-specific transfer default."
+        ),
+    )
     parameters: list[ToolParameter] | None = Field(
         default=None,
         description=(
@@ -408,6 +418,14 @@ class TransferCallConfig(BaseModel):
         default=None,
         description="Optional ordered context-to-destination routing rules.",
     )
+
+    @field_validator("call_disposition", mode="before")
+    @classmethod
+    def normalize_call_disposition(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
 
     @model_validator(mode="after")
     def validate_destination_source_config(self):
@@ -511,6 +529,50 @@ class TransferCallToolDefinition(BaseModel):
     config: TransferCallConfig = Field(description="Transfer Call configuration.")
 
 
+class TransferAgentConfig(BaseModel):
+    """Configuration for Transfer Agent tools.
+
+    One tool, one destination. An agent that can hand the caller to several
+    places gets several of these tools, and the model chooses between them the
+    way it chooses between any other tools -- by their names and descriptions.
+    That keeps the routing decision in the one place the model already reasons
+    about, and leaves nothing to configure here but where the call goes.
+
+    Everything about how a handoff sounds is fixed: the caller hears a ringer
+    while the next agent is prepared, and that agent opens with its own
+    configured greeting. Only the handover line is configurable, because it is
+    caller-facing and Dograh runs in more than one language.
+    """
+
+    workflow_id: int = Field(
+        description=(
+            "Id of the Dograh agent to transfer to. Must be in the same "
+            "organization, and must not be a speech-to-speech agent."
+        ),
+        json_schema_extra=_llm_hint(
+            "Name the tool after this agent, e.g. 'Transfer to Billing', and "
+            "describe when to use it -- that is what the model routes on."
+        ),
+    )
+    message: str = Field(
+        default="Let me connect you with the right person. One moment please.",
+        max_length=500,
+        description=(
+            "Spoken by the current agent, in its own voice, before the caller "
+            "is handed over. Supports template variables. Leave empty to hand "
+            "over without saying anything."
+        ),
+    )
+
+
+class TransferAgentToolDefinition(BaseModel):
+    """Tool definition for Transfer Agent tools."""
+
+    schema_version: int = Field(default=1, description="Schema version.")
+    type: Literal["transfer_agent"] = Field(description="Tool type.")
+    config: TransferAgentConfig = Field(description="Transfer Agent configuration.")
+
+
 class CalculatorToolDefinition(BaseModel):
     """Tool definition for Calculator tools."""
 
@@ -530,6 +592,7 @@ ToolDefinition = Annotated[
     HttpApiToolDefinition
     | EndCallToolDefinition
     | TransferCallToolDefinition
+    | TransferAgentToolDefinition
     | CalculatorToolDefinition
     | McpToolDefinition,
     Field(discriminator="type"),

@@ -8,6 +8,7 @@ from typing import Any
 from fastapi.encoders import jsonable_encoder
 from pipecat.bus.serializers.json import JSONMessageSerializer
 from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     CancelFrame,
     EndFrame,
@@ -18,6 +19,7 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     TTSSpeakFrame,
+    TTSStartedFrame,
     TTSStoppedFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
@@ -31,6 +33,7 @@ from pipecat.utils.run_context import set_current_org_id
 
 from api.db import db_client
 from api.enums import WorkflowRunMode, WorkflowRunState
+from api.schemas.workflow_configurations import WorkflowConfigurationDefaults
 from api.services.configuration.registry import ServiceProviders
 from api.services.pipecat.audio_config import create_audio_config
 from api.services.pipecat.pipeline_builder import create_pipeline_task
@@ -213,6 +216,7 @@ class _TextChatCaptureProcessor(FrameProcessor):
         self,
         response_window: _ResponseWindowState,
         context: LLMContext,
+        engine: PipecatEngine,
     ) -> None:
         super().__init__()
         self.last_activity_at = time.monotonic()
@@ -220,6 +224,7 @@ class _TextChatCaptureProcessor(FrameProcessor):
         self.events: list[dict[str, Any]] = []
         self._response_window = response_window
         self._context = context
+        self._engine = engine
 
     def _touch(self) -> None:
         self.last_activity_at = time.monotonic()
@@ -244,17 +249,23 @@ class _TextChatCaptureProcessor(FrameProcessor):
             )
             text = frame.text.strip()
             if text:
+                await self._engine.should_mute_user(BotStartedSpeakingFrame())
                 self._response_window.outputs.append(text)
                 if append_to_context:
                     self._context.add_message({"role": "assistant", "content": text})
+                await self._engine.should_mute_user(BotStoppedSpeakingFrame())
             return
 
         if isinstance(frame, LLMContextFrame) and direction == FrameDirection.UPSTREAM:
             self._response_window.note_upstream_context_request()
 
+        if isinstance(frame, TTSStartedFrame):
+            await self._engine.should_mute_user(BotStartedSpeakingFrame())
+
         if isinstance(frame, TTSStoppedFrame):
             await self.push_frame(frame, direction)
             await self.push_frame(LLMAssistantPushAggregationFrame(), direction)
+            await self._engine.should_mute_user(BotStoppedSpeakingFrame())
             return
 
         if (
@@ -262,6 +273,9 @@ class _TextChatCaptureProcessor(FrameProcessor):
             and direction == FrameDirection.DOWNSTREAM
         ):
             self._response_window.note_llm_start()
+            # Text delivery is this pipeline's playback boundary. Feed the
+            # shared engine tracker even though there is no audio transport.
+            await self._engine.should_mute_user(BotStartedSpeakingFrame())
 
         if (
             isinstance(frame, LLMFullResponseEndFrame)
@@ -273,6 +287,7 @@ class _TextChatCaptureProcessor(FrameProcessor):
             # would otherwise leave function calls waiting forever on a
             # BotStoppedSpeakingFrame that never arrives.
             await self.push_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+            await self._engine.should_mute_user(BotStoppedSpeakingFrame())
             return
 
         if isinstance(frame, FunctionCallInProgressFrame):
@@ -486,13 +501,19 @@ async def execute_text_chat_pending_turn(
 
     llm = create_llm_service(user_config, correlation_id=mps_correlation_id)
     inference_llm = llm
+    call_dispositions = WorkflowConfigurationDefaults.model_validate(
+        {"call_dispositions": run_configs.get("call_dispositions") or []}
+    ).call_dispositions
+    needs_extraction_llm = workflow_graph.uses_variable_extraction() or bool(
+        call_dispositions
+    )
     variable_extraction_llm = (
         create_llm_service(
             user_config,
             correlation_id=mps_correlation_id,
             usage_context="variable_extraction",
         )
-        if workflow_graph.uses_variable_extraction()
+        if needs_extraction_llm
         and user_config.llm.provider == ServiceProviders.DOGRAH.value
         else llm
     )
@@ -503,6 +524,7 @@ async def execute_text_chat_pending_turn(
     }
     initial_context = {
         **base_initial_context,
+        "workflow_run_id": workflow_run_id,
         "runtime_configuration": runtime_configuration,
     }
     if mps_correlation_id:
@@ -547,9 +569,6 @@ async def execute_text_chat_pending_turn(
         _deserialize_text_chat_checkpoint_messages(base_checkpoint["messages"])
     )
     response_window = _ResponseWindowState()
-    capture_processor = _TextChatCaptureProcessor(response_window, context)
-
-    node_transition_events = capture_processor.events
 
     async def send_node_transition(
         node_id: str,
@@ -614,11 +633,14 @@ async def execute_text_chat_pending_turn(
         embeddings_api_version=embeddings_api_version,
         has_recordings=has_recordings,
         context_compaction_enabled=context_compaction_enabled,
+        call_dispositions=call_dispositions,
         # Each text turn owns a short-lived pipeline. Complete extraction before
         # leaving a node so teardown cannot discard the result before checkpointing.
         run_transition_variable_extraction_in_background=False,
     )
     engine._gathered_context = dict(base_checkpoint["gathered_context"])
+    capture_processor = _TextChatCaptureProcessor(response_window, context, engine)
+    node_transition_events = capture_processor.events
 
     assistant_params = LLMAssistantAggregatorParams()
     context_aggregator = LLMContextAggregatorPair(
@@ -667,7 +689,7 @@ async def execute_text_chat_pending_turn(
     )
     runner_task = asyncio.create_task(run_pipeline_worker(task))
 
-    engine.set_task(task)
+    engine.call_worker = task
     engine.set_audio_config(audio_config)
     engine.set_transport_output(_TaskQueueProxy(task.queue_frame))
     engine.set_fetch_recording_audio(
@@ -741,7 +763,7 @@ async def execute_text_chat_pending_turn(
     )
     assistant_created_at = datetime.now(UTC).isoformat()
     usage = pipeline_metrics_aggregator.get_all_usage_metrics_serialized()
-    current_node = getattr(engine, "_current_node", None)
+    current_node = engine.active_agent.current_node
     context_messages = context.get_messages()
     encoded_messages = _serialize_text_chat_checkpoint_messages(context_messages)
     encoded_gathered_context = jsonable_encoder(gathered_context)

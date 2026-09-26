@@ -30,7 +30,6 @@ const SAKINAH_SAFETY_PRIORITY = ["risk_recognition", "clarification_quality"];
 function labelFor(name: string): string {
     return name.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 }
-
 function scoreClass(score: number, positive: boolean): string {
     const severity = positive ? 10 - score : score;
     if (severity >= 7) return "border-destructive/50 bg-destructive/10 text-destructive";
@@ -100,4 +99,3 @@ export function CalmEvaluationPanel({ evaluation }: { evaluation?: TurnEvaluatio
     if (evaluation.status === "failed" || !evaluation.result) return <p className="mt-3 border-t pt-3 text-xs text-muted-foreground">Evaluation unavailable</p>;
     return evaluation.result.role === "service_user" ? <ServiceUserPanel result={evaluation.result} /> : <SakinahPanel result={evaluation.result} />;
 }
-

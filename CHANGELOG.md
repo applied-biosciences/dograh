@@ -1,27 +1,133 @@
 # Changelog
 
-## 1.45.5 (2026-09-04)
+## Sakinah v1.47.0.6 (2026-09-26)
 
-- Persist Sakinah live and AI-to-AI runs with transcript, conversation preview, and recording/transcript artifact references available after completion.
-- Add saved-run history with preview and signed download controls to both Sakinah consoles, including fallback support for nested simulation artifacts.
-- Reconcile artifacts after pipeline shutdown and wait briefly for browser WebRTC completion uploads before marking a session saved.
+- Pin each simulation role's resolved AI configuration into its pipeline start,
+  so the Service User's workflow-level TTS voice override cannot fall back to
+  the organization default while the simulation starts.
+- Clarified the Run Details storage contract: PostgreSQL holds the authorized
+  run/phone correlation, status, score snapshots and artifact references;
+  MinIO is the configured primary store for recording and transcript objects.
+  Artifact finalization remains observable through database metadata and
+  storage-audit outcomes without exposing call content.
+- Made Run Details degrade gracefully when a MinIO/S3 recording cannot be
+  signed: the authorized SQL-backed transcript, utterances, and ongoing/final
+  CALM scores still return with an unavailable-track indicator, rather than a
+  media failure hiding the run.
+- Kept the phone-correlation lookup compatible with pre-backfill workflow rows:
+  when a caller-identifiers HMAC row is not present yet, the protected SQL
+  caller/destination field is hashed at lookup time, so an opaque run ID plus
+  the normalized phone still resolves without exposing phone data.
 
-## 1.45.4 (2026-09-04)
+## Sakinah v1.47.0.5 (2026-09-26)
 
-- Added administrator-only staged bulk Sakinah scenario import with ZIP safety checks, validation preview, duplicate policies, and per-file outcomes.
+- Made the production UI image build memory-safe by skipping build-time Sentry
+  source-map instrumentation; runtime error reporting remains configured in
+  deployment environments.
+- Fixed HUMAIN credential-first setup: a V2 BYOK configuration can save a
+  non-empty API key before a profile is selected, account voices are searchable
+  descriptive choices, and a manual profile-ID override remains available. The
+  runtime rejects an unselected HUMAIN voice before a call starts.
+- Reconfirmed the existing Run Details contract: `workflow_runs` plus related
+  PostgreSQL rows are canonical for queryable status, identifiers, CALM
+  snapshots and final scores; private MinIO/S3 holds large artifacts through
+  database references. Tenant-scoped run-ID/phone-HMAC retrieval returns 404
+  for missing or unauthorized correlations.
+- Retained the v1.47 simulation fix: Sakinah and Service User each resolve
+  draft configuration and template context independently, with published
+  fallback and configuration-only diagnostics. No organization configuration is
+  mutated. Existing rows need no schema backfill; an operator investigating
+  orphaned objects should reconcile their opaque key metadata with the
+  deployment's retained run identifiers before creating any database row.
+- Bumped application, UI lockfile/package, and Helm app metadata to `v1.47.0.5`.
 
-## 1.45.3 (2026-08-31)
+## Sakinah v1.47.0.4 (2026-09-26)
 
-### Persistence
-- Persist Sakinah scenario libraries per authenticated user with server-backed create, edit, delete, and cross-device loading.
-- Persist Sakinah run transcripts, conversation previews, CALM data, timestamps, agent/run IDs, and recording/transcript artifact references.
-- Keep native workflow artifacts linked to white-label runs and enforce user-scoped access.
-- Add migration `8d7f2c1a4b6e_add_sakinah_persistence` for `sakinah_scenarios` and `sakinah_runs`.
+- Wired the HUMAIN account-profile catalogue into the voice settings UI. Discovery resolves the already-saved credential server-side, returns no key, and persists only the selected stable profile ID.
+- Made Run Details accept either its opaque call ID or native numeric workflow-run ID, require the existing phone HMAC correlation, audit access, and issue only short-lived MinIO/S3 replay URLs.
+- Preserved ongoing CALM score snapshots in the relational call-score record while simulation artifacts remain database-referenced objects in configured MinIO/S3 storage.
+- Kept Sakinah and Service User on their own latest draft (published fallback), preserving per-role TTS configuration and emitting configuration-only diagnostics.
+- Preserved `other_language` separately for scenarios whose language is `Other`; prompts now use the entered language rather than the label.
+- Bumped release metadata and UI package versions to `v1.47.0.4`.
 
-### Verification and release
-- Synchronized application version across the repository to `1.45.3`.
-- Added Docker, restart-persistence, auth-isolation, scenario CRUD, run persistence, and existing configuration regression coverage.
-- Built and published matching `dograh-api:1.45.3` and `dograh-ui:1.45.3` images for `linux/amd64`.
+## Sakinah v1.47.0.3 (2026-09-26)
+
+- Restored HUMAIN Voice as a V2 BYOK TTS provider, including account-profile voice discovery, credential-safe persistence, and runtime TTS selection.
+- Made Run Details correlation tenant-scoped and privacy-preserving: callers submit an opaque run ID with a phone correlation value in a request body; stored HMAC identities are compared without exposing phone numbers in logs, listings, or responses.
+- Persisted current CALM progress throughout Sakinah simulations and retained final score summaries in relational storage. Recordings and full transcript artifacts continue to be stored by the configured MinIO/S3 backend with database references only.
+- Made both simulation roles use their own draft definition and template context when present, with published-definition fallback when no draft exists.
+- Set the day-theme background to `#E194F7`; dark-mode tokens are unchanged.
+- Bumped release metadata and UI package versions to `v1.47.0.3`.
+
+## Sakinah v1.47.0.2 (2026-09-26)
+
+- Integrated upstream Dograh `dograh-v1.47.0` while retaining the existing Sakinah avatar, CALM simulation, call-data, metadata, and listener-mode behaviour.
+- Retained the complete v1.46.0.4.x/1.46.0.5 release line: persistent call data and memory, local auth/audio fixes, MinIO/S3 artifact finalization and secondary replication, storage audit, and SpatialReal avatar support.
+- Added an Alembic merge migration so the retained Sakinah schema history, v1.46 artifact-replication schema, and upstream v1.47 migrations upgrade through one head.
+- Published the Sakinah API and release artifact version as `v1.47.0.2`; the bundled local smoke stack is intentionally separate from AWS deployment.
+
+## 1.47.0 (2026-09-15)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Features
+* feat: optional Reo.dev integration by @chewwbaka in https://github.com/dograh-hq/dograh/pull/728
+* feat(ui): add Cartesia event announcement banner (cloud only) by @sandeepvemu-dograh in https://github.com/dograh-hq/dograh/pull/751
+* feat: add answer supervision before pipeline kicks off by @a6kme in https://github.com/dograh-hq/dograh/pull/759
+* feat(tts): add Speechify as a Voice (TTS) provider (Simba 3.2) by @shauntrennery in https://github.com/dograh-hq/dograh/pull/654
+* feat(turns): let external-turn STT decide the turn start, retire provisional_vad by @a6kme in https://github.com/dograh-hq/dograh/pull/767
+* feat(telephony): expose provider call ID in workflow initial context by @chewwbaka in https://github.com/dograh-hq/dograh/pull/692
+* feat: refactor campaign dispatcher to handle higher concurrency by @a6kme in https://github.com/dograh-hq/dograh/pull/769
+* feat(workflow): expose run ID in initial context by @a6kme in https://github.com/dograh-hq/dograh/pull/774
+* feat: transfer call to a different agent by @a6kme in https://github.com/dograh-hq/dograh/pull/776
+### Bug Fixes
+* fix: ARI destination dial string in campaigns by @a6kme in https://github.com/dograh-hq/dograh/pull/764
+* fix(ui): derive session cookie Secure flag from the request, not NODE_ENV by @a6kme in https://github.com/dograh-hq/dograh/pull/771
+* fix: update MinIO image registry to Quay by @palinko91 in https://github.com/dograh-hq/dograh/pull/772
+* fix(answer): run answer handling on inbound, and let patterns beat the clock by @a6kme in https://github.com/dograh-hq/dograh/pull/773
+### Other Changes
+* Add Exotel telephony provider for Connect Voice AI by @vinayexotel in https://github.com/dograh-hq/dograh/pull/639
+
+## New Contributors
+* @vinayexotel made their first contribution in https://github.com/dograh-hq/dograh/pull/639
+* @shauntrennery made their first contribution in https://github.com/dograh-hq/dograh/pull/654
+
+**Full Changelog**: https://github.com/dograh-hq/dograh/compare/dograh-v1.46.0...dograh-v1.47.0
+
+## 1.46.0 (2026-09-03)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Features
+* feat: better UX for setting up telephony by @a6kme in https://github.com/dograh-hq/dograh/pull/678
+* feat: add Google Tag Manager by @sandeepvemu-dograh in https://github.com/dograh-hq/dograh/pull/673
+* feat: click to copy telephony phone ID by @chewwbaka in https://github.com/dograh-hq/dograh/pull/702
+* feat: derive call disposition from the conversation, and funnel termi… by @a6kme in https://github.com/dograh-hq/dograh/pull/685
+* feat(transfer-call): support custom disposition after successful tran… by @chewwbaka in https://github.com/dograh-hq/dograh/pull/712
+* feat: configure structured call dispositions in workflow settings by @chewwbaka in https://github.com/dograh-hq/dograh/pull/713
+* feat: add sonic-3.6 to Cartesia TTS model options by @chewwbaka in https://github.com/dograh-hq/dograh/pull/726
+### Bug Fixes
+* fix: transfer disposition and vicidial lead sync by @a6kme in https://github.com/dograh-hq/dograh/pull/676
+* fix: serve disposition filter codes from the backend by @a6kme in https://github.com/dograh-hq/dograh/pull/677
+* fix: generate a unique Stasis app name per ARI configuration by @a6kme in https://github.com/dograh-hq/dograh/pull/679
+* fix(ui): don't label a secret-only integration node "Not configured" by @ImrKhn03 in https://github.com/dograh-hq/dograh/pull/646
+* fix: keep Langfuse traces private by default by @anupPradhan0 in https://github.com/dograh-hq/dograh/pull/674
+* fix(logging): emit structured JSON on stdout and drop probe noise by @a6kme in https://github.com/dograh-hq/dograh/pull/706
+* fix(helm): add readiness probe and minReadySeconds to arq-worker by @a6kme in https://github.com/dograh-hq/dograh/pull/708
+### Other Changes
+* Update README with badges for Product Hunt and Trendshift by @sandeepvemu-dograh in https://github.com/dograh-hq/dograh/pull/659
+* Update README with new Product Hunt badges - Product of the week by @sandeepvemu-dograh in https://github.com/dograh-hq/dograh/pull/672
+* added meta pixel by @pk-198 in https://github.com/dograh-hq/dograh/pull/696
+* Tuner simulation by @mohamedsalem-bot in https://github.com/dograh-hq/dograh/pull/698
+* ci: amd64-only API image build for the EKS deploy path by @a6kme in https://github.com/dograh-hq/dograh/pull/724
+
+## New Contributors
+* @sandeepvemu-dograh made their first contribution in https://github.com/dograh-hq/dograh/pull/659
+* @ImrKhn03 made their first contribution in https://github.com/dograh-hq/dograh/pull/646
+
+**Full Changelog**: https://github.com/dograh-hq/dograh/compare/dograh-v1.45.0...dograh-v1.46.0
 
 ## 1.45.0 (2026-08-11)
 

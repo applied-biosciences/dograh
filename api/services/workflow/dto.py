@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
+from api.schemas.answer_supervisor import DEFAULT_LISTENING_WINDOW_SECONDS
 from api.services.integrations import (
     all_packages,
 )
@@ -153,7 +154,8 @@ class _ExtractionNodeDataMixin(BaseModel):
         display_name="Variables to Extract",
         description=(
             "Each entry declares one variable to capture, with its name, data "
-            "type, and extraction hint."
+            "type, and extraction hint. Call outcomes are configured separately "
+            "in workflow settings."
         ),
         display_options=DisplayOptions(show={"extraction_enabled": [True]}),
     )
@@ -284,14 +286,17 @@ class _ToolDocumentRefsMixin(BaseModel):
         "delayed_start": {
             "display_name": "Delayed Start",
             "description": (
-                "When true, the agent waits before speaking after pickup. Useful "
-                "for outbound calls where the called party needs a moment to settle."
+                "Set the initial listening window for outbound voicemail and screening "
+                "handling. A brief human greeting can end the wait sooner."
             ),
         },
         "delayed_start_duration": {
             "display_name": "Delay Duration (seconds)",
-            "description": "Seconds to wait before the agent speaks. 0.1–10.",
-            "spec_default": 2.0,
+            "description": (
+                "Seconds to listen for a silent answer before opening. 0.1–10. "
+                "Replaces the default 1.2-second listening window."
+            ),
+            "spec_default": DEFAULT_LISTENING_WINDOW_SECONDS,
             "min_value": 0.1,
             "max_value": 10.0,
             "display_options": DisplayOptions(show={"delayed_start": [True]}),
@@ -351,11 +356,8 @@ class StartCallNodeData(
     delayed_start_duration: Optional[float] = spec_field(
         default=None, ui_type=PropertyType.number
     )
-    # Kept in the wire model so previously published workflows remain readable.
-    # New definitions use ``pre_call_fetch_mode`` exclusively.
-    pre_call_fetch_enabled: bool = spec_field(default=False, spec_exclude=True)
-    pre_call_fetch_mode: Optional[PreCallFetchMode] = spec_field(
-        default=None, ui_type=PropertyType.options
+    pre_call_fetch_mode: PreCallFetchMode = spec_field(
+        default=PreCallFetchMode.disabled, ui_type=PropertyType.options
     )
     pre_call_fetch_url: Optional[str] = spec_field(
         default=None, ui_type=PropertyType.url
@@ -364,15 +366,32 @@ class StartCallNodeData(
         default=None, ui_type=PropertyType.credential_ref
     )
 
-    @model_validator(mode="after")
-    def migrate_legacy_pre_call_fetch_toggle(self):
-        if self.pre_call_fetch_mode is None:
-            self.pre_call_fetch_mode = (
-                PreCallFetchMode.always
-                if self.pre_call_fetch_enabled
-                else PreCallFetchMode.disabled
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_pre_call_fetch_toggle(cls, data):
+        """Deprecated input shim for the pre-#638 ``pre_call_fetch_enabled``.
+
+        Stored definitions were migrated by alembic ``f3a1c47b9e02``, so this
+        only catches writes from clients still on the old field — old SDK pins
+        and hand-rolled API callers. Without it the key would be dropped
+        silently (node data models ignore extras) and the node would fall back
+        to ``disabled``, turning off a fetch the caller asked for.
+
+        Remove once those clients are gone; the field is no longer emitted by
+        the UI, the SDKs, or the node spec.
+        """
+        if not isinstance(data, dict) or "pre_call_fetch_enabled" not in data:
+            return data
+
+        data = dict(data)
+        legacy_enabled = data.pop("pre_call_fetch_enabled")
+        # An explicit mode always wins — a caller sending both means the new
+        # field, with the legacy key left over from whatever it round-tripped.
+        if data.get("pre_call_fetch_mode") is None:
+            data["pre_call_fetch_mode"] = (
+                PreCallFetchMode.always if legacy_enabled else PreCallFetchMode.disabled
             )
-        return self
+        return data
 
 
 @node_spec(

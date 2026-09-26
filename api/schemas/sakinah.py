@@ -12,6 +12,7 @@ SCENARIO_FIELDS = (
     "age",
     "gender",
     "language",
+    "other_language",
     "emotion",
     "communication_style",
     "initial_information",
@@ -34,6 +35,10 @@ class ScenarioWriteRequest(BaseModel):
     age: str = Field(default="", max_length=200)
     gender: str = Field(default="", max_length=200)
     language: str = Field(default="", max_length=200)
+    # Keep the chosen option and free-text language separate.  In particular,
+    # "Other" is a valid UI selection, not the language spoken by the
+    # simulated service user.
+    other_language: str = Field(default="", max_length=200)
     emotion: str = Field(default="", max_length=500)
     communication_style: str = Field(default="", max_length=20_000)
     initial_information: str = Field(default="", max_length=20_000)

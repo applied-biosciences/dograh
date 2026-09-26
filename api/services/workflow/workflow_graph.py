@@ -2,15 +2,16 @@ import re
 from collections import Counter
 from typing import Dict, Iterable, List, Set
 
-from api.services.workflow.dto import EdgeDataDTO, NodeType, ReactFlowDTO
+from api.services.workflow.dto import (
+    EdgeDataDTO,
+    NodeType,
+    PreCallFetchMode,
+    ReactFlowDTO,
+)
 from api.services.workflow.errors import ItemKind, WorkflowError
 from api.services.workflow.node_data import BaseNodeData
 from api.services.workflow.node_specs import all_specs, get_spec
-
-# Regex for matching {{ variable }} template placeholders.
-# Captures: group(1) = variable path, group(2) = filter name, group(3) = filter value.
-# Shared with api.utils.template_renderer via import.
-TEMPLATE_VAR_PATTERN = r"\{\{\s*([^|\s}]+)(?:\s*\|\s*([^:}]+)(?::([^}]+))?)?\s*\}\}"
+from api.utils.template_renderer import TEMPLATE_VAR_PATTERN, is_builtin_variable
 
 # Variables injected by the system at runtime, not from source data.
 _SYSTEM_VARIABLES = {"campaign_id", "provider", "source_uuid"}
@@ -72,6 +73,12 @@ def extract_template_variables(text: str) -> Set[str]:
         # Skip system-injected variables
         if var_name in _SYSTEM_VARIABLES:
             continue
+        # Skip variables the renderer computes itself, such as
+        # current_time_<TZ>. No source data could supply them, so asking a
+        # campaign's contact file for a column named after one rejects a file
+        # that is complete.
+        if is_builtin_variable(var_name):
+            continue
 
         variables.add(var_name)
     return variables
@@ -129,11 +136,8 @@ class Node:
         self.tool_uuids = getattr(data, "tool_uuids", None)
         self.document_uuids = getattr(data, "document_uuids", None)
         self.mcp_tool_filters = getattr(data, "mcp_tool_filters", None)
-        self.pre_call_fetch_enabled = getattr(data, "pre_call_fetch_enabled", False)
-        mode = getattr(data, "pre_call_fetch_mode", None)
-        self.pre_call_fetch_mode = (mode.value if hasattr(mode, "value") else mode) or (
-            "always" if self.pre_call_fetch_enabled else "disabled"
-        )
+        mode = getattr(data, "pre_call_fetch_mode", PreCallFetchMode.disabled)
+        self.pre_call_fetch_mode = mode.value if hasattr(mode, "value") else mode
         self.pre_call_fetch_url = getattr(data, "pre_call_fetch_url", None)
         self.pre_call_fetch_credential_uuid = getattr(
             data, "pre_call_fetch_credential_uuid", None

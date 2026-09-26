@@ -7,6 +7,7 @@ from sqlalchemy.future import select
 
 from api.db.base_client import BaseDBClient
 from api.db.models import (
+    CallScoreModel,
     SakinahRunModel,
     SakinahScenarioModel,
     UserModel,
@@ -23,6 +24,7 @@ SCENARIO_FIELDS = (
     "age",
     "gender",
     "language",
+    "other_language",
     "emotion",
     "communication_style",
     "initial_information",
@@ -34,6 +36,38 @@ SCENARIO_FIELDS = (
     "notes",
     "freestyle_prompt",
 )
+
+
+def _structured_call_scores(
+    calm_turns: list[dict[str, Any]] | None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Project CALM turns without copying prompts or transcript text."""
+    calm: list[dict[str, Any]] = []
+    safety: list[dict[str, Any]] = []
+    clinical: list[dict[str, Any]] = []
+    for turn in calm_turns or []:
+        if not isinstance(turn, dict):
+            continue
+        turn_id = turn.get("turn_id")
+        calm.append(
+            {
+                "turn_id": turn_id,
+                "scores": turn.get("calm_scores") or {},
+                "confidence": turn.get("calm_confidence") or {},
+                "trend": turn.get("trend") or {},
+                "significant_changes": turn.get("significant_changes") or {},
+            }
+        )
+        safety.append(
+            {"turn_id": turn_id, "safety_state": turn.get("safety_state") or {}}
+        )
+        clinical.append(
+            {
+                "turn_id": turn_id,
+                "clinical_evaluation": turn.get("clinical_evaluation") or {},
+            }
+        )
+    return {"turns": calm}, {"turns": safety}, {"turns": clinical}
 
 
 def _scenario_dict(scenario: SakinahScenarioModel) -> dict[str, Any]:
@@ -48,6 +82,7 @@ def _scenario_dict(scenario: SakinahScenarioModel) -> dict[str, Any]:
         "age": scenario.age,
         "gender": scenario.gender,
         "language": scenario.language,
+        "otherLanguage": scenario.other_language,
         "emotion": scenario.emotion,
         "communicationStyle": scenario.communication_style,
         "initialInformation": scenario.initial_information,
@@ -64,6 +99,55 @@ def _scenario_dict(scenario: SakinahScenarioModel) -> dict[str, Any]:
 
 
 class SakinahPersistenceClient(BaseDBClient):
+    async def update_sakinah_run_progress(
+        self,
+        *,
+        user_id: int,
+        session_id: str,
+        calm_turns: list[dict[str, Any]],
+        preview_data: dict[str, Any],
+    ) -> SakinahRunModel | None:
+        """Durably expose in-progress CALM state to the owning user only.
+
+        The relational row owns queryable current/final score summaries.  Raw
+        transcripts and recordings remain in the configured object store.
+        """
+        async with self.async_session() as session:
+            item = (
+                await session.execute(
+                    select(SakinahRunModel)
+                    .where(
+                        SakinahRunModel.session_id == session_id,
+                        SakinahRunModel.user_id == user_id,
+                    )
+                    .with_for_update()
+                )
+            ).scalars().first()
+            if item is None:
+                return None
+            item.calm_turns = calm_turns
+            item.preview_data = {**(item.preview_data or {}), **preview_data}
+            calm_score, safety_score, clinical_evaluation = _structured_call_scores(calm_turns)
+            call_score = (
+                await session.execute(
+                    select(CallScoreModel).where(CallScoreModel.agent_run_id == item.run_id)
+                )
+            ).scalars().first()
+            if call_score is None:
+                session.add(CallScoreModel(
+                    agent_run_id=item.run_id,
+                    calm_score=calm_score,
+                    safety_score=safety_score,
+                    clinical_evaluation=clinical_evaluation,
+                ))
+            else:
+                call_score.calm_score = calm_score
+                call_score.safety_score = safety_score
+                call_score.clinical_evaluation = clinical_evaluation
+            await session.commit()
+            await session.refresh(item)
+            return item
+
     async def get_sakinah_scenarios(
         self, user_id: int, search: str | None = None
     ) -> list[dict[str, Any]]:
@@ -81,6 +165,7 @@ class SakinahPersistenceClient(BaseDBClient):
                     cast(SakinahScenarioModel.tags, Text),
                     SakinahScenarioModel.persona,
                     SakinahScenarioModel.language,
+                    SakinahScenarioModel.other_language,
                     SakinahScenarioModel.communication_style,
                     SakinahScenarioModel.initial_information,
                     SakinahScenarioModel.hidden_information,
@@ -93,8 +178,7 @@ class SakinahPersistenceClient(BaseDBClient):
                 )
                 query = query.where(search_text.ilike(pattern))
             result = await session.execute(
-                query
-                .order_by(
+                query.order_by(
                     SakinahScenarioModel.sequence.asc(),
                     SakinahScenarioModel.created_at.asc(),
                 )
@@ -265,6 +349,35 @@ class SakinahPersistenceClient(BaseDBClient):
             item.recording_file_reference = recording_file_reference or {}
             item.calm_turns = calm_turns or []
             item.timings = timings or {}
+
+            calm_score, safety_score, clinical_evaluation = _structured_call_scores(
+                calm_turns
+            )
+            workflow_run = await session.get(WorkflowRunModel, item.run_id)
+            if workflow_run is not None:
+                score_result = await session.execute(
+                    select(CallScoreModel).where(
+                        CallScoreModel.agent_run_id == item.run_id
+                    )
+                )
+                call_score = score_result.scalars().first()
+                if call_score is None:
+                    session.add(
+                        CallScoreModel(
+                            agent_run_id=item.run_id,
+                            calm_score=calm_score,
+                            safety_score=safety_score,
+                            clinical_evaluation=clinical_evaluation,
+                        )
+                    )
+                else:
+                    call_score.calm_score = calm_score
+                    call_score.safety_score = safety_score
+                    call_score.clinical_evaluation = clinical_evaluation
+                workflow_run.latency_metrics = {
+                    **(workflow_run.latency_metrics or {}),
+                    "simulation": timings or {},
+                }
             await session.commit()
             await session.refresh(item)
             return item

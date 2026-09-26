@@ -80,7 +80,16 @@ MPS_API_URL = os.getenv("MPS_API_URL", "https://services.dograh.com")
 DOGRAH_DEVOPS_SECRET = os.getenv("DOGRAH_DEVOPS_SECRET") or None
 
 # Storage Configuration
-ENABLE_AWS_S3 = os.getenv("ENABLE_AWS_S3", "false").lower() == "true"
+# Keep the legacy switch for backward compatibility.  New Sakinah deployments
+# use MinIO as primary storage and may opt into an asynchronous S3 copy.
+LEGACY_ENABLE_AWS_S3 = os.getenv("ENABLE_AWS_S3", "false").lower() == "true"
+ENABLE_AWS_S3 = LEGACY_ENABLE_AWS_S3
+ENABLE_AWS_S3_PRIMARY = (
+    os.getenv("ENABLE_AWS_S3_PRIMARY", "false").lower() == "true"
+)
+ENABLE_AWS_S3_SECONDARY = (
+    os.getenv("ENABLE_AWS_S3_SECONDARY", "false").lower() == "true"
+)
 
 # MinIO Configuration
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
@@ -93,13 +102,22 @@ MINIO_PUBLIC_ENDPOINT = (
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "voice-audio")
+MINIO_REGION = os.getenv("MINIO_REGION", "us-east-1")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
+MINIO_ALLOW_ANONYMOUS = (
+    os.getenv(
+        "MINIO_ALLOW_ANONYMOUS",
+        "true" if ENVIRONMENT == Environment.LOCAL.value else "false",
+    ).lower()
+    == "true"
+)
 
 # AWS S3 Configuration
 AWS_REGION = os.environ.get("AWS_REGION") or os.environ.get("S3_REGION", "eu-west-2")
 # ``AWS_RECORDINGS_BUCKET`` is the white-label name. Keep ``S3_BUCKET`` as the
 # existing generic storage setting so existing deployments continue to work.
 AWS_RECORDINGS_BUCKET = os.environ.get("AWS_RECORDINGS_BUCKET")
+AWS_S3_PREFIX = os.environ.get("AWS_S3_PREFIX", "").strip("/")
 S3_BUCKET = AWS_RECORDINGS_BUCKET or os.environ.get("S3_BUCKET")
 S3_REGION = AWS_REGION
 S3_KMS_KEY_ID = os.environ.get("S3_KMS_KEY_ID") or None
@@ -128,6 +146,11 @@ MEMORY_EMBEDDING_MODEL = os.getenv(
 MEMORY_EMBEDDING_DIMENSIONS = int(os.getenv("MEMORY_EMBEDDING_DIMENSIONS", "1536"))
 MEMORY_MAX_RESULTS = max(1, int(os.getenv("MEMORY_MAX_RESULTS", "5")))
 MEMORY_MIN_SIMILARITY = float(os.getenv("MEMORY_MIN_SIMILARITY", "0.72"))
+# Use a stable keyed hash for caller identifiers.  OSS_JWT_SECRET is a
+# backwards-compatible fallback for existing deployments.
+CALLER_IDENTIFIER_HASH_KEY = os.getenv("CALLER_IDENTIFIER_HASH_KEY") or os.getenv(
+    "OSS_JWT_SECRET", "change-me-in-production"
+)
 RECORD_CALLS = os.getenv("RECORD_CALLS", "true").lower() == "true"
 
 # Sentry configuration
@@ -140,6 +163,16 @@ POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")
 
 ENABLE_ARI_STASIS = os.getenv("ENABLE_ARI_STASIS", "false").lower() == "true"
 SERIALIZE_LOG_OUTPUT = os.getenv("SERIALIZE_LOG_OUTPUT", "false").lower() == "true"
+
+# Whether the end-of-call audio recordings (mixed / user / bot tracks) are
+# uploaded to object storage. Deployments that must not retain call audio, or
+# that simply do not want to pay for the storage, can turn this off. The
+# transcript upload and every other artifact are unaffected. Audio is still
+# buffered in memory during the call (integrations such as Noveum consume it);
+# only the upload and the recording_url / recordings metadata are skipped.
+ENABLE_CALL_RECORDING_UPLOAD = (
+    os.getenv("ENABLE_CALL_RECORDING_UPLOAD", "true").lower() == "true"
+)
 
 # Telephony media WebSocket authentication.
 # The carrier/connector dials back the media socket
@@ -223,6 +256,9 @@ COUNTRY_CODES = {
 DEFAULT_ORG_CONCURRENCY_LIMIT = max(
     1, int(os.getenv("DEFAULT_ORG_CONCURRENCY_LIMIT", "10"))
 )
+# Outlast both the dispatcher's 240-second timeout and ARQ's 300-second deadline.
+CAMPAIGN_PROCESSING_CLAIM_TIMEOUT_SECONDS = 360
+
 DEFAULT_CAMPAIGN_RETRY_CONFIG = {
     "enabled": True,
     "max_retries": 1,
@@ -292,3 +328,27 @@ OSS_JWT_SECRET = os.getenv("OSS_JWT_SECRET", "change-me-in-production")
 OSS_JWT_EXPIRY_HOURS = int(os.getenv("OSS_JWT_EXPIRY_HOURS", "720"))  # 30 days
 
 TUNER_BASE_URL = os.getenv("TUNER_BASE_URL", "https://api.usetuner.ai")
+
+# SpatialReal avatar engine (AvatarKit). The API key never leaves the backend;
+# the browser gets a short-lived session token minted via /avatar/session.
+SPATIALREAL_APP_ID = os.getenv("SPATIALREAL_APP_ID", "")
+SPATIALREAL_API_KEY = os.getenv("SPATIALREAL_API_KEY", "")
+SPATIALREAL_AVATAR_ID = os.getenv("SPATIALREAL_AVATAR_ID", "")
+SPATIALREAL_REGION = os.getenv("SPATIALREAL_REGION", "us-west")
+SPATIALREAL_CONSOLE_ENDPOINT = os.getenv(
+    "SPATIALREAL_CONSOLE_ENDPOINT",
+    f"https://console.{SPATIALREAL_REGION}.spatialwalk.cloud/v1/console",
+)
+# Session tokens are capped at 24h by SpatialReal; default to 12h.
+SPATIALREAL_TOKEN_TTL = int(os.getenv("SPATIALREAL_TOKEN_TTL", "43200"))
+# Avatar driving mode: "sdk" (browser streams audio to SpatialReal directly),
+# "host" (backend drives the avatar from inside the pipeline and relays
+# audio+animation to the browser), or "off".
+SPATIALREAL_MODE = os.getenv("SPATIALREAL_MODE", "sdk").lower()
+SPATIALREAL_INGRESS_ENDPOINT = os.getenv(
+    "SPATIALREAL_INGRESS_ENDPOINT",
+    f"wss://api.{SPATIALREAL_REGION}.spatialwalk.cloud/v2/driveningress",
+)
+# Max concurrent host-mode avatar sessions. Beyond the cap new runs proceed
+# audio-only (the avatar is refused, never the call).
+SPATIALREAL_MAX_SESSIONS = int(os.getenv("SPATIALREAL_MAX_SESSIONS", "10"))

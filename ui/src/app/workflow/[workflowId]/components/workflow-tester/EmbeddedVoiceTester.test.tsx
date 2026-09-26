@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import React from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { EmbeddedVoiceTester } from "./EmbeddedVoiceTester";
@@ -25,6 +26,20 @@ vi.mock("../../run/[runId]/components", () => ({
     WorkflowConfigErrorDialog: () => null,
 }));
 
+// The avatar panel resolves the auto-start gate from an async avatar-config
+// fetch. These tests protect the baseline audio-only auto-start contract, so
+// mock the panel as "no avatar for this run" (resolves the gate immediately),
+// keeping the assertions synchronous and independent of avatar behavior.
+vi.mock("@/components/avatar/SpatialAvatarPanel", () => ({
+    SpatialAvatarPanel: ({ onAvatarWillDrive }: { onAvatarWillDrive?: (willDrive: boolean) => void }) => {
+        // eslint-disable-next-line react-hooks/rules-of-hooks
+        React.useEffect(() => {
+            onAvatarWillDrive?.(false);
+        }, [onAvatarWillDrive]);
+        return null;
+    },
+}));
+
 type BackendStatus = "reachable" | "unreachable";
 
 // Base shape of everything EmbeddedVoiceTester destructures off the hook.
@@ -38,12 +53,13 @@ function baseHookReturn(opts: {
     backendStatus?: BackendStatus;
     isStarting?: boolean;
     connectionStatus?: string;
+    isCompleted?: boolean;
 }) {
     return {
         audioRef: { current: null },
         connectionActive: false,
         permissionError: null,
-        isCompleted: false,
+        isCompleted: opts.isCompleted ?? false,
         apiKeyModalOpen: false,
         setApiKeyModalOpen: vi.fn(),
         apiKeyError: null,
@@ -366,5 +382,39 @@ describe("EmbeddedVoiceTester auto-start", () => {
         // top of it.
         expect(refreshAppConfig).toHaveBeenCalledTimes(2);
         expect(start).not.toHaveBeenCalled();
+    });
+});
+
+describe("EmbeddedVoiceTester spent run", () => {
+    // A run the backend refuses as already completed is surfaced by the hook as
+    // a completed call, not a failed one, so the footer must lead to a new run
+    // rather than a retry that would be refused again.
+    it("offers a new test and releases the run instead of retrying", () => {
+        const onReset = vi.fn();
+        const start = vi.fn();
+        useWebSocketRTCMock.mockReturnValue(
+            baseHookReturn({
+                start,
+                refreshAppConfig: vi.fn(),
+                appConfigLoading: false,
+                backendStatus: "reachable",
+                isCompleted: true,
+            })
+        );
+
+        render(
+            <EmbeddedVoiceTester
+                workflowId={1}
+                workflowRunId={630140}
+                accessToken="token"
+                onReset={onReset}
+            />
+        );
+
+        expect(screen.queryByRole("button", { name: /retry call/i })).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: /start another test/i }));
+
+        expect(onReset).toHaveBeenCalledTimes(1);
+        expect(start).toHaveBeenCalledTimes(1); // the initial auto-start only
     });
 });

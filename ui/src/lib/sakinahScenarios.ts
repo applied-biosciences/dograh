@@ -14,6 +14,7 @@ export interface Scenario {
     age: string;
     gender: string;
     language: string;
+    otherLanguage: string;
     emotion: string;
     communicationStyle: string;
     initialInformation: string;
@@ -44,6 +45,7 @@ export const EMPTY_SCENARIO_DRAFT: ScenarioDraft = {
     age: "",
     gender: "Not specified",
     language: "English",
+    otherLanguage: "",
     emotion: "",
     communicationStyle: "",
     initialInformation: "",
@@ -98,6 +100,7 @@ export function parseStoredScenarios(raw: string | null): Scenario[] {
                 ...scenario,
                 category: typeof scenario.category === "string" ? scenario.category : "",
                 tags: Array.isArray(scenario.tags) ? scenario.tags.filter((tag) => typeof tag === "string") : [],
+                otherLanguage: typeof scenario.otherLanguage === "string" ? scenario.otherLanguage : "",
             }))
             : [];
     } catch {
@@ -122,6 +125,7 @@ export function scenarioMatchesSearch(scenario: Scenario, search: string): boole
         scenario.category,
         scenario.persona,
         scenario.language,
+        scenario.otherLanguage,
         scenario.communicationStyle,
         scenario.initialInformation,
         scenario.hiddenInformation,
@@ -163,6 +167,7 @@ export function scenarioToDraft(scenario: Scenario): ScenarioDraft {
         age: scenario.age,
         gender: scenario.gender,
         language: scenario.language,
+        otherLanguage: scenario.otherLanguage,
         emotion: scenario.emotion,
         communicationStyle: scenario.communicationStyle,
         initialInformation: scenario.initialInformation,
@@ -189,7 +194,7 @@ export function compileScenarioPrompt(scenario: Scenario): string {
     if (scenario.mode === "freestyle") return scenario.freestylePrompt.trim();
     const singleLineFields: Array<[string, string]> = [
         ["Scenario", scenario.title], ["Persona", scenario.persona], ["Age", scenario.age],
-        ["Gender", scenario.gender], ["Language", scenario.language], ["Emotion", scenario.emotion],
+        ["Gender", scenario.gender], ["Language", scenario.language === "Other" ? scenario.otherLanguage : scenario.language], ["Emotion", scenario.emotion],
         ["Communication style", scenario.communicationStyle],
     ];
     const longFields: Array<[string, string]> = [
@@ -252,6 +257,7 @@ function importedDraft(value: unknown, index: number): ScenarioDraft {
         age: stringValue(["age", "service_user_age"]),
         gender: stringValue("gender", EMPTY_SCENARIO_DRAFT.gender),
         language: stringValue("language", EMPTY_SCENARIO_DRAFT.language),
+        otherLanguage: stringValue(["otherLanguage", "other_language"]),
         emotion: stringValue("emotion", typeof emotionalStateCategory === "string" ? emotionalStateCategory : ""),
         communicationStyle: stringValue(["communicationStyle", "communication_style"]),
         initialInformation: stringValue(["initialInformation", "initial_information"]),

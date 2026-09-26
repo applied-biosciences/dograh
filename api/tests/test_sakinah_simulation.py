@@ -23,6 +23,7 @@ from api.services.quota_service import QuotaCheckResult
 from api.services.sakinah.simulation import (
     SAKINAH_ROLE,
     SERVICE_USER_ROLE,
+    Simulation,
     SimulationAuthorizationError,
     simulation_manager,
 )
@@ -80,6 +81,18 @@ def _fake_pipeline(chunks_by_run: dict[int, list[str]] | None = None):
         await disconnected.wait()
 
     return fake_run_pipeline
+
+
+def test_audio_subscriber_receives_bounded_preconnect_backlog():
+    """Startup latency must not discard the opening Simulation utterance."""
+    simulation = Simulation("sim-audio-backlog", 1, SCENARIO, 300)
+    simulation.publish_audio(b"first")
+    simulation.publish_audio(b"second")
+
+    queue = simulation.subscribe_audio()
+
+    assert queue.get_nowait() == b"first"
+    assert queue.get_nowait() == b"second"
 
 
 @pytest.fixture
@@ -395,7 +408,8 @@ async def test_initial_greeting_gated_by_suppress_flag(suppress_greeting):
     engine._call_context_vars = (
         {"suppress_initial_greeting": True} if suppress_greeting else {}
     )
-    engine.workflow.start_node_id = "start"
+    engine.active_agent.workflow.start_node_id = "start"
+    engine.start_initial_agent = AsyncMock(return_value=True)
     engine.set_node = AsyncMock()
     engine.queue_node_opening = AsyncMock()
 
@@ -411,6 +425,7 @@ async def test_initial_greeting_gated_by_suppress_flag(suppress_greeting):
         in_memory_logs_buffer=MagicMock(),
         transcript_log_coordinator=MagicMock(),
         pipeline_metrics_aggregator=MagicMock(),
+        termination_funnel=MagicMock(),
         audio_config=AudioConfig(
             transport_in_sample_rate=16000, transport_out_sample_rate=16000
         ),

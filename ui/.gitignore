@@ -41,3 +41,8 @@ next-env.d.ts
 .env.sentry-build-plugin
 
 .env
+.env.local
+.env*
+
+# avatarkit WASM copied into public/ at build time by @spatialwalk/avatarkit/next
+/public/_avatarkit/
