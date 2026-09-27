@@ -4,6 +4,23 @@ The Scenario Console uses Dograh's existing browser WebRTC, speech-to-text,
 runtime LLM, and text-to-speech pipeline. Saved sessions are JSON files under
 `data/sakinah-sessions/` on the host.
 
+## Artifact storage and Run Details
+
+Local Docker uses MinIO. For AWS production storage, set
+`ENABLE_AWS_S3=true` (the documented compatible switch) or
+`ENABLE_AWS_S3_PRIMARY=true`, plus `AWS_RECORDINGS_BUCKET` and `AWS_REGION`.
+New recordings, transcripts, and score-only CALM checkpoints then use the
+private S3 bucket and Run Details issues short-lived signed URLs. Do not set
+both a MinIO primary and the S3 primary switch: `ENABLE_AWS_S3_SECONDARY=true`
+is only for asynchronous MinIO-to-S3 replication.
+
+Simulation Run Details retain both native numeric run IDs and their opaque call
+IDs. A native-ID lookup additionally requires the existing phone correlation;
+it never exposes the supplied phone number in responses or logs. Sakinah and
+Service User simulations each select their own latest workflow draft (falling
+back to their published definition) and retain independently configured TTS
+provider/model/voice settings.
+
 ## Build and start
 
 Create the normal local `.env` first (including `OSS_JWT_SECRET` and the model,
@@ -52,7 +69,9 @@ the Start button shows the workflow and run IDs for both agents.
 when either agent ends the call, when either pipeline fails, or after the
 maximum duration (5 minutes by default, `max_duration_seconds` in the start
 request, capped at 15 minutes). The merged transcript is saved to
-`data/sakinah-sessions/<simulation_id>.json`.
+`data/sakinah-sessions/<simulation_id>.json`. In-progress CALM scores are
+also persisted to PostgreSQL and as a score-only snapshot in the configured
+object store; prompts and transcript text are not copied into that snapshot.
 
 The authenticated API smoke script is not a Simulation pass. A Simulation
 pass requires a normal browser session on the canonical localhost origin and

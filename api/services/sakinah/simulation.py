@@ -25,6 +25,7 @@ from api.services.pipecat.ws_sender_registry import (
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.sakinah.calm.runtime import EXPERIMENT_MODES, CalmSimulationRuntime
 from api.services.sakinah.calm_evaluation import CalmEvaluator, run_llm_inference
+from api.services.sakinah.calm_persistence import persist_calm_progress
 from api.services.sakinah.internal_transport import (
     InternalTransport,
     create_internal_transport_pair,
@@ -493,17 +494,26 @@ class SimulationManager:
             )
             # A running simulation must not hold CALM state only in process
             # memory: it is needed by the authorized Run Details view after a
-            # reconnect or worker restart.  Store structured scores only, not
-            # the prompt/transcript that produced them.
+            # reconnect or worker restart.  PostgreSQL stores the queryable
+            # projection and the selected MinIO/S3 backend receives a bounded
+            # score-only recovery snapshot; neither contains the prompt or
+            # transcript that produced the scores.
             if simulation.user_id is not None:
+                calm_artifact = await persist_calm_progress(
+                    session_id=simulation.id,
+                    calm_turns=simulation.calm_runtime.turns,
+                )
+                preview_data = {
+                    "calm_scores": simulation.snapshot()["calm_scores"],
+                    "calm_trend": simulation.snapshot()["calm_trend"],
+                }
+                if calm_artifact is not None:
+                    preview_data["calm_artifact"] = calm_artifact
                 await db_client.update_sakinah_run_progress(
                     user_id=simulation.user_id,
                     session_id=simulation.id,
                     calm_turns=simulation.calm_runtime.turns,
-                    preview_data={
-                        "calm_scores": simulation.snapshot()["calm_scores"],
-                        "calm_trend": simulation.snapshot()["calm_trend"],
-                    },
+                    preview_data=preview_data,
                 )
             # Analysis is applied only to Sakinah's LLM. The service-user
             # workflow has its own context and never receives this callback.

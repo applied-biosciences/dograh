@@ -11,10 +11,9 @@ async def test_call_replay_returns_short_lived_signed_url_without_storage_detail
 ):
     class _Storage:
         async def aget_signed_url(self, key, expiration, force_inline):
-            assert key == "recordings/2026/09/service-user/call/call.wav"
             assert expiration == 300
             assert force_inline is True
-            return "https://signed.example/replay?expires=300"
+            return f"https://signed.example/{key}?expires=300"
 
     class _DB:
         audit = None
@@ -27,6 +26,7 @@ async def test_call_replay_returns_short_lived_signed_url_without_storage_detail
                 "agent_run_id": 42,
                 "storage_backend": None,
                 "recording_key": "recordings/2026/09/service-user/call/call.wav",
+                "transcript_key": "transcripts/2026/09/service-user/call.txt",
                 "transcript": "user: Hello",
                 "utterances": [],
             }
@@ -44,6 +44,7 @@ async def test_call_replay_returns_short_lived_signed_url_without_storage_detail
     )
     payload = response.model_dump()
     assert payload["recording_signed_url"].startswith("https://signed.example/")
+    assert payload["transcript_signed_url"].endswith("call.txt?expires=300")
     assert "recording_key" not in payload
     assert "bucket" not in payload
     assert payload["recordings"][0]["track"] == "mixed"

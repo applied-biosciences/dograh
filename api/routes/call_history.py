@@ -21,6 +21,7 @@ class CallReplayResponse(BaseModel):
     call_id: str
     agent_run_id: int
     recording_signed_url: str | None = None
+    transcript_signed_url: str | None = None
     expires_in: int = Field(ge=60, le=900)
     transcript: str | None = None
     utterances: list[dict[str, Any]] = Field(default_factory=list)
@@ -42,6 +43,7 @@ async def _build_replay_response(
 ) -> CallReplayResponse:
     """Issue short-lived object URLs only after the scoped DB lookup succeeds."""
     signed_url = None
+    transcript_signed_url = None
     signed_tracks: list[RecordingReplayTrack] = []
     recording_rows = record.get("recordings") or []
     if not recording_rows and record.get("recording_key"):
@@ -63,6 +65,22 @@ async def _build_replay_response(
         if recording.get("track") == "mixed":
             signed_url = track_url
 
+    transcript_key = record.get("transcript_key")
+    if transcript_key:
+        transcript_backend = record.get("storage_backend")
+        transcript_storage = (
+            get_storage_for_backend(transcript_backend)
+            if transcript_backend
+            else storage_fs
+        )
+        transcript_signed_url = await transcript_storage.aget_signed_url(
+            transcript_key, expiration=expires_in, force_inline=True
+        )
+        if not transcript_signed_url:
+            raise HTTPException(
+                status_code=503, detail="Transcript is temporarily unavailable"
+            )
+
     try:
         await db_client.record_audit_event(
             organization_id=record.get("organization_id") or user.selected_organization_id,
@@ -82,6 +100,7 @@ async def _build_replay_response(
         call_id=record["call_id"],
         agent_run_id=record["agent_run_id"],
         recording_signed_url=signed_url,
+        transcript_signed_url=transcript_signed_url,
         expires_in=expires_in,
         transcript=record.get("transcript"),
         utterances=record.get("utterances", []),

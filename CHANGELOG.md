@@ -1,5 +1,12 @@
 # Changelog
 
+## Sakinah v1.47.0.9 (2026-09-27)
+
+- Restored the documented `ENABLE_AWS_S3=true` compatibility switch so configured AWS recordings buckets are selected as the primary artifact store rather than silently falling back to MinIO.
+- Added private, short-lived signed transcript replay URLs alongside recording URLs and normalized audio/text response MIME headers for newly written and legacy S3 artifacts.
+- Checkpointed in-progress CALM scores to PostgreSQL and to a score-only MinIO/S3 object-store snapshot, without persisting prompts or transcript text in that snapshot.
+- Kept native numeric run-ID plus phone-correlation Run Details access and per-role simulation draft/TTS resolution, including provider/model/voice diagnostics without credentials.
+
 ## Sakinah v1.47.0.4 (2026-09-26)
 
 - Wired the HUMAIN account-profile catalogue into the voice settings UI. Discovery resolves the already-saved credential server-side, returns no key, and persists only the selected stable profile ID.

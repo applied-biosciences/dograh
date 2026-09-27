@@ -2,11 +2,11 @@ from typing import Any, Dict, Optional
 
 import aioboto3
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from api.constants import S3_KMS_KEY_ID, S3_SERVER_SIDE_ENCRYPTION
 
-from .base import AsyncReadable, BaseFileSystem
+from .base import AsyncReadable, BaseFileSystem, artifact_content_type
 
 
 class S3FileSystem(BaseFileSystem):
@@ -66,6 +66,9 @@ class S3FileSystem(BaseFileSystem):
                 "Key": file_path,
                 "Body": await content.read(),
             }
+            content_type = artifact_content_type(file_path)
+            if content_type:
+                put_kwargs["ContentType"] = content_type
             # Keep recordings private and encrypted at rest.  ``aws:kms`` uses
             # the S3-managed KMS key when no customer key was supplied; a
             # customer-managed key can be selected with S3_KMS_KEY_ID.
@@ -82,7 +85,7 @@ class S3FileSystem(BaseFileSystem):
             async with self.session.client("s3", **self._client_kwargs()) as s3_client:
                 await s3_client.put_object(**put_kwargs)
             return True
-        except ClientError:
+        except (BotoCoreError, ClientError):
             return False
 
     async def aupload_file(self, local_path: str, destination_path: str) -> bool:
@@ -92,7 +95,7 @@ class S3FileSystem(BaseFileSystem):
                     local_path, self.bucket_name, destination_path
                 )
             return True
-        except ClientError:
+        except (BotoCoreError, ClientError):
             return False
 
     async def aget_signed_url(
@@ -113,29 +116,20 @@ class S3FileSystem(BaseFileSystem):
             async with self.session.client("s3", **self._client_kwargs()) as s3_client:
                 params = {"Bucket": self.bucket_name, "Key": file_path}
 
-                # Make artifacts viewable inline in the browser when requested
-                if force_inline:
-                    if file_path.endswith(".txt"):
-                        params.update(
-                            {
-                                "ResponseContentType": "text/plain",
-                                "ResponseContentDisposition": "inline",
-                            }
-                        )
-                    elif file_path.endswith(".wav"):
-                        params.update(
-                            {
-                                "ResponseContentType": "audio/wav",
-                                "ResponseContentDisposition": "inline",
-                            }
-                        )
-                    elif file_path.endswith(".mp3"):
-                        params.update(
-                            {
-                                "ResponseContentType": "audio/mpeg",
-                                "ResponseContentDisposition": "inline",
-                            }
-                        )
+                # Historic objects may have been uploaded as generic bytes.
+                # Override their response metadata so browser playback and
+                # transcript viewing work even before a migration rewrites
+                # every object. Downloads remain explicit attachments.
+                content_type = artifact_content_type(file_path)
+                if content_type:
+                    params.update(
+                        {
+                            "ResponseContentType": content_type,
+                            "ResponseContentDisposition": (
+                                "inline" if force_inline else "attachment"
+                            ),
+                        }
+                    )
 
                 url = await s3_client.generate_presigned_url(
                     "get_object",
@@ -143,7 +137,7 @@ class S3FileSystem(BaseFileSystem):
                     ExpiresIn=expiration,
                 )
             return url
-        except ClientError:
+        except (BotoCoreError, ClientError):
             return None
 
     async def aget_file_metadata(self, file_path: str) -> Optional[Dict[str, Any]]:
@@ -161,7 +155,7 @@ class S3FileSystem(BaseFileSystem):
                     "content_type": response.get("ContentType"),
                     "storage_class": response.get("StorageClass"),
                 }
-        except ClientError:
+        except (BotoCoreError, ClientError):
             return None
 
     async def aget_presigned_put_url(
@@ -184,7 +178,7 @@ class S3FileSystem(BaseFileSystem):
                     ExpiresIn=expiration,
                 )
             return url
-        except ClientError:
+        except (BotoCoreError, ClientError):
             return None
 
     async def adownload_file(self, source_path: str, local_path: str) -> bool:
@@ -193,7 +187,7 @@ class S3FileSystem(BaseFileSystem):
             async with self.session.client("s3", **self._client_kwargs()) as s3_client:
                 await s3_client.download_file(self.bucket_name, source_path, local_path)
             return True
-        except ClientError:
+        except (BotoCoreError, ClientError):
             return False
 
     async def acopy_file(self, source_path: str, destination_path: str) -> bool:
@@ -206,5 +200,5 @@ class S3FileSystem(BaseFileSystem):
                     CopySource={"Bucket": self.bucket_name, "Key": source_path},
                 )
             return True
-        except ClientError:
+        except (BotoCoreError, ClientError):
             return False

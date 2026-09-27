@@ -136,13 +136,18 @@ class StorageBackend(Enum):
     def get_current_backend(cls):
         """Return the explicitly configured primary artifact backend.
 
+        ``ENABLE_AWS_S3`` is the original documented switch and must continue
+        to select S3.  A regression in the Sakinah storage work only consulted
+        the newer ``ENABLE_AWS_S3_PRIMARY`` flag, which silently sent a live
+        deployment configured with the documented setting back to MinIO.
+
         Stage C's ``ENABLE_AWS_S3_SECONDARY`` is intentionally absent here:
         it copies already-persisted MinIO objects and must not change the
         synchronous write/read path for a workflow run.
         """
-        from api.constants import ENABLE_AWS_S3_PRIMARY
+        from api.constants import ENABLE_AWS_S3_PRIMARY, LEGACY_ENABLE_AWS_S3
 
-        if ENABLE_AWS_S3_PRIMARY:
+        if ENABLE_AWS_S3_PRIMARY or LEGACY_ENABLE_AWS_S3:
             return cls.S3
         return cls.MINIO
 

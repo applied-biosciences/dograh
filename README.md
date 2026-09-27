@@ -1,6 +1,6 @@
 # Dograh AI
 
-> **CALMOS Connect / Sakinah v1.47.0.4** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): integrates upstream Dograh v1.47 while retaining the full v1.46.0.4.x/1.46.0.5 white-label line: the Sakinah Scenario Console, AI-to-AI simulation, durable call and storage persistence, privacy-controlled memory, artifact replication, SpatialReal avatars, and scenario search. v1.47.0.4 adds safe HUMAIN profile selection, durable in-progress CALM scores, and phone-correlated Run Details with short-lived MinIO/S3 replay links. See [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
+> **CALMOS Connect / Sakinah v1.47.0.9** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): integrates upstream Dograh v1.47 while retaining the full v1.46.0.4.x/1.46.0.5 white-label line: the Sakinah Scenario Console, AI-to-AI simulation, durable call and storage persistence, privacy-controlled memory, artifact replication, SpatialReal avatars, and scenario search. v1.47.0.9 restores the documented AWS S3 primary-storage switch, adds signed transcript replay URLs, and checkpoints in-progress CALM scores to PostgreSQL plus the configured MinIO/S3 backend. See [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
 > **Deployment limitation**: run the API with a **single worker** (`FASTAPI_WORKERS=1`, the default). Simulations keep in-process state, so with multiple workers the simulation status/stop endpoints and the transcript/audio WebSockets intermittently land on a worker that doesn't own the simulation ([#4](https://github.com/applied-biosciences/dograh/issues/4)).
 
 <p align="center">
@@ -11,7 +11,7 @@
 
 **The open-source, self-hostable alternative to Vapi & Retell** — build production voice agents with a visual workflow builder, test them in minutes, and let AI coding assistants help design and edit them through MCP.
 
-> **Sakinah distribution:** this checkout packages the compatible `v1.47.0.4` release, based on upstream Dograh `dograh-v1.47.0`. Production images must be built for `linux/amd64`; deployment and local smoke-test instructions are maintained in the accompanying Sakinah deployment bundle.
+> **Sakinah distribution:** this checkout packages the compatible `v1.47.0.9` release, based on upstream Dograh `dograh-v1.47.0`. Production images must be built for `linux/amd64`; deployment and local smoke-test instructions are maintained in the accompanying Sakinah deployment bundle.
 
 <p align="center">
   <a href="https://app.dograh.com">
@@ -141,6 +141,9 @@ its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
 - Private recording and transcript storage with server-generated, short-lived
   playback/download links. Local Docker uses MinIO; production deployments can
   use encrypted AWS S3 without exposing credentials or public object URLs.
+  Set `ENABLE_AWS_S3=true` (or `ENABLE_AWS_S3_PRIMARY=true`) with
+  `AWS_RECORDINGS_BUCKET` to select AWS S3 as the primary store; the legacy
+  setting is supported for existing deployments.
 - A privacy-controlled Sakinah memory layer backed by PostgreSQL pgvector,
   stable service-user identities, provenance, retention, and caller states
   (`UNKNOWN`, `FIRST_TIME`, `RECOGNISED`, and `VERIFIED`).
