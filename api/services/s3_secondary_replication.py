@@ -62,6 +62,16 @@ def _artifact_refs(audit: dict[str, Any]) -> list[dict[str, Any]]:
                 "checksum_sha256": transcript.get("checksum_sha256"),
             }
         )
+    for item in audit.get("scores", {}).get("objects", []):
+        if item.get("status") == "success" and item.get("object_key"):
+            refs.append(
+                {
+                    "type": item.get("type") or "calm_scores",
+                    "object_key": item["object_key"],
+                    "size_bytes": item.get("size_bytes"),
+                    "checksum_sha256": item.get("checksum_sha256"),
+                }
+            )
     return refs
 
 
@@ -72,7 +82,11 @@ async def _persist_primary_records(
     from api.db import db_client
 
     backend = str(audit.get("storage_backend") or "minio")
-    bucket = audit.get("recordings", {}).get("bucket") or audit.get("transcript", {}).get("bucket")
+    bucket = (
+        audit.get("recordings", {}).get("bucket")
+        or audit.get("transcript", {}).get("bucket")
+        or audit.get("scores", {}).get("bucket")
+    )
     for ref in refs:
         await db_client.upsert_artifact_replication_status(
             run_id=run_id,
@@ -97,7 +111,9 @@ async def _record_replication_result(
         await db_client.update_artifact_replication_status(
             run_id=run_id,
             primary_object_key=source_key,
-            replication_status=("synced" if result["status"] == "success" else "failed"),
+            replication_status=(
+                "synced" if result["status"] == "success" else "failed"
+            ),
             s3_saved=result["status"] == "success",
             retry_count=int(result.get("attempt") or 0),
             checksum_sha256=result.get("checksum_sha256"),
@@ -106,7 +122,11 @@ async def _record_replication_result(
             uploaded=result["status"] == "success",
         )
     except Exception as exc:  # noqa: BLE001 - DB audit state cannot fail calls
-        logger.warning("Unable to persist S3 replication state for run {} ({})", run_id, type(exc).__name__)
+        logger.warning(
+            "Unable to persist S3 replication state for run {} ({})",
+            run_id,
+            type(exc).__name__,
+        )
 
 
 def secondary_status(artifact_refs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -185,14 +205,18 @@ def _error_class(exc: Exception) -> str:
 
 
 async def schedule_s3_replication(
-    run_id: int, audit: dict[str, Any]
+    run_id: int, audit: dict[str, Any], *, job_suffix: str | None = None
 ) -> dict[str, Any]:
     """Enqueue replication only after primary artifact writes succeeded."""
     refs = _artifact_refs(audit)
     try:
         await _persist_primary_records(run_id, audit, refs)
     except Exception as exc:  # noqa: BLE001 - primary persistence is authoritative
-        logger.warning("Unable to index primary artifacts for run {} ({})", run_id, type(exc).__name__)
+        logger.warning(
+            "Unable to index primary artifacts for run {} ({})",
+            run_id,
+            type(exc).__name__,
+        )
     result = secondary_status(refs)
     if result["status"] != "pending":
         return result
@@ -204,7 +228,7 @@ async def schedule_s3_replication(
             FunctionNames.REPLICATE_WORKFLOW_RUN_ARTIFACTS_S3,
             run_id,
             refs,
-            _job_id=f"s3-secondary-{run_id}",
+            _job_id=f"s3-secondary-{run_id}{f'-{job_suffix}' if job_suffix else ''}",
         )
     except Exception as exc:  # noqa: BLE001 - primary completion is independent
         result["status"] = "failed"
@@ -240,9 +264,15 @@ async def _replicate_one(
     if hasattr(s3_storage, "aget_file_metadata"):
         existing = await s3_storage.aget_file_metadata(destination_key)
         if existing:
-            existing_checksum = (existing.get("metadata") or {}).get("sha256") or existing.get("checksum_sha256")
+            existing_checksum = (existing.get("metadata") or {}).get(
+                "sha256"
+            ) or existing.get("checksum_sha256")
             same_size = expected_size is None or existing.get("size") == expected_size
-            if same_size and expected_checksum and existing_checksum == expected_checksum:
+            if (
+                same_size
+                and expected_checksum
+                and existing_checksum == expected_checksum
+            ):
                 result = {
                     **ref,
                     "object_key": destination_key,
@@ -251,10 +281,25 @@ async def _replicate_one(
                     "status": "success",
                     "attempt": 0,
                 }
-                _log_replication_event(run_id=run_id, bucket=AWS_RECORDINGS_BUCKET, object_key=destination_key, source_object_key=source_key, status="success", attempt=0, artifact_type=ref.get("type"), size_bytes=result["size_bytes"])
+                _log_replication_event(
+                    run_id=run_id,
+                    bucket=AWS_RECORDINGS_BUCKET,
+                    object_key=destination_key,
+                    source_object_key=source_key,
+                    status="success",
+                    attempt=0,
+                    artifact_type=ref.get("type"),
+                    size_bytes=result["size_bytes"],
+                )
                 await _record_replication_result(run_id, source_key, result)
                 return result
-            result = {**ref, "object_key": destination_key, "status": "failed", "attempt": 0, "error_class": "ChecksumMismatch"}
+            result = {
+                **ref,
+                "object_key": destination_key,
+                "status": "failed",
+                "attempt": 0,
+                "error_class": "ChecksumMismatch",
+            }
             await _record_replication_result(run_id, source_key, result)
             return result
     last_error: Exception | None = None
@@ -365,17 +410,21 @@ async def replicate_workflow_run_artifacts_to_s3(
         return {**config, "status": "failed", "error_class": error_class}
 
     results = [
-        await _replicate_one(s3_storage, workflow_run_id, ref)
-        for ref in artifact_refs
+        await _replicate_one(s3_storage, workflow_run_id, ref) for ref in artifact_refs
     ]
-    final_status = "success" if all(item["status"] == "success" for item in results) else "failed"
+    final_status = (
+        "success" if all(item["status"] == "success" for item in results) else "failed"
+    )
     return {**config, "status": final_status, "objects": results}
 
 
 async def reconcile_pending_s3_replications(_ctx: Any) -> dict[str, Any]:
     """Periodic, idempotent repair for primary objects lacking an S3 copy."""
     if not ENABLE_AWS_S3_SECONDARY or not AWS_RECORDINGS_BUCKET:
-        return {"status": "disabled" if not ENABLE_AWS_S3_SECONDARY else "not_configured", "runs": 0}
+        return {
+            "status": "disabled" if not ENABLE_AWS_S3_SECONDARY else "not_configured",
+            "runs": 0,
+        }
 
     from api.db import db_client
 

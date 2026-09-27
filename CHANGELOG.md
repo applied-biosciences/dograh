@@ -1,5 +1,24 @@
 # Changelog
 
+## Sakinah v1.47.0.9 (2026-09-27)
+
+- Kept Sakinah and Service User simulation TTS configurations independent. Both
+  roles use their latest draft definition when present (published otherwise),
+  and a missing Service User voice now resolves from its own workflow/org
+  configuration rather than silently inheriting Sakinah's voice. Startup logs
+  continue to report role, definition, provider, model, and voice only.
+- Persisted each ongoing simulation CALM turn to PostgreSQL and an immutable,
+  score-only MinIO JSON object; when AWS S3 secondary replication is enabled,
+  the score object is asynchronously copied to the configured S3 bucket.
+- Registered the S3 replication job with the ARQ worker and passed the optional
+  AWS secondary-storage settings through Compose. A five-minute reconciliation
+  job also retries older pending artifacts after worker interruptions.
+- Restored the recording download action in Run Preview when replay is loaded
+  by call ID, while retaining authorized key-based signed downloads.
+- Made `DATABASE_URL` overridable in Compose for deployments with a dedicated
+  Dograh AWS database. Bundled PostgreSQL remains the default; unrelated RDS
+  services must not be selected just because they exist in the account.
+
 ## Sakinah v1.47.0.8 (2026-09-27)
 
 - Fixed new Agent Run finalization after v1.47.0.7: the completion handler now

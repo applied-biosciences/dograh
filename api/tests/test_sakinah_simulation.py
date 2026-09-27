@@ -14,6 +14,7 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -25,7 +26,6 @@ from api.services.sakinah.simulation import (
     SERVICE_USER_ROLE,
     Simulation,
     SimulationAuthorizationError,
-    _has_tts_override,
     _simulation_workflow_configurations,
     simulation_manager,
 )
@@ -53,16 +53,30 @@ def test_simulation_uses_workflow_config_when_definition_config_is_empty():
     }
 
 
-def test_tts_override_detection_supports_v2_and_legacy_shapes():
-    assert _has_tts_override(
-        {
-            "model_configuration_v2_override": {
-                "byok": {"pipeline": {"tts": {"voice": "voice-1"}}}
-            }
-        }
+def test_simulation_roles_keep_their_own_workflow_voice_configs():
+    sakinah_config = {"model_overrides": {"tts": {"voice": "sakinah-voice"}}}
+    service_user_config = {"model_overrides": {"tts": {"voice": "service-user-voice"}}}
+    sakinah_workflow = type(
+        "Workflow", (), {"workflow_configurations": sakinah_config}
+    )()
+    service_user_workflow = type(
+        "Workflow", (), {"workflow_configurations": service_user_config}
+    )()
+
+    assert (
+        _simulation_workflow_configurations(sakinah_workflow, None)["model_overrides"][
+            "tts"
+        ]["voice"]
+        == "sakinah-voice"
     )
-    assert _has_tts_override({"model_overrides": {"tts": {"voice": "voice-2"}}})
-    assert not _has_tts_override({"model_overrides": {"llm": {"model": "gpt"}}})
+    assert (
+        _simulation_workflow_configurations(service_user_workflow, None)[
+            "model_overrides"
+        ]["tts"]["voice"]
+        == "service-user-voice"
+    )
+    assert sakinah_workflow.workflow_configurations == sakinah_config
+    assert service_user_workflow.workflow_configurations == service_user_config
 
 
 async def _make_user(db_session, slug: str):
@@ -99,7 +113,8 @@ def _fake_pipeline(chunks_by_run: dict[int, list[str]] | None = None):
         assert sender is not None, "sender must be registered before pipelines"
 
         chunks = (chunks_by_run or {}).get(
-            workflow_run_id, [f"chunk-{workflow_run_id}-a", f"chunk-{workflow_run_id}-b"]
+            workflow_run_id,
+            [f"chunk-{workflow_run_id}-a", f"chunk-{workflow_run_id}-b"],
         )
         for chunk in chunks:
             await sender({"type": "rtf-bot-text", "payload": {"text": chunk}})
@@ -146,14 +161,32 @@ def no_start_delay(monkeypatch):
 
 
 async def test_simulation_lifecycle_start_events_stop(
-    test_client_factory, db_session, sessions_dir, authorized_runs, no_start_delay
+    test_client_factory,
+    db_session,
+    sessions_dir,
+    authorized_runs,
+    no_start_delay,
+    monkeypatch,
 ):
     """Start seeds both workflows, streams labelled turns, and Stop finalizes."""
     user = await _make_user(db_session, "sim_lifecycle")
 
-    with patch(
-        "api.services.pipecat.run_pipeline._run_pipeline", new=_fake_pipeline()
-    ):
+    role_configs = [
+        SimpleNamespace(
+            tts=SimpleNamespace(provider="test", model="model", voice="sakinah-voice")
+        ),
+        SimpleNamespace(
+            tts=SimpleNamespace(
+                provider="test", model="model", voice="service-user-voice"
+            )
+        ),
+    ]
+    resolver = AsyncMock(side_effect=role_configs)
+    monkeypatch.setattr(
+        "api.services.configuration.ai_model_configuration.get_effective_ai_model_configuration_for_workflow",
+        resolver,
+    )
+    with patch("api.services.pipecat.run_pipeline._run_pipeline", new=_fake_pipeline()):
         async with test_client_factory(user) as client:
             response = await client.post(
                 "/api/v1/sakinah/simulations", json={"scenario": SCENARIO}
@@ -165,8 +198,8 @@ async def test_simulation_lifecycle_start_events_stop(
             assert snapshot["status"] == "running"
             assert set(snapshot["agents"]) == {SAKINAH_ROLE, SERVICE_USER_ROLE}
 
-            # Both seeded workflows exist in the org, and each run pins the
-            # published definition of its workflow.
+            # Both roles pin an explicit definition; a draft, when present,
+            # takes precedence over the published definition.
             workflows = await db_session.get_all_workflows(
                 organization_id=user.selected_organization_id
             )
@@ -182,6 +215,7 @@ async def test_simulation_lifecycle_start_events_stop(
                 assert run.definition_id is not None
                 assert run.initial_context["scenario"] == SCENARIO
                 assert run.initial_context["simulation_role"] == role
+                assert run.extra["use_draft"] is True
 
             # Turn-taking: only the service user is a listener; Sakinah must
             # speak first, the service user must wait for her greeting.
@@ -202,6 +236,14 @@ async def test_simulation_lifecycle_start_events_stop(
             simulation = simulation_manager.get(
                 simulation_id, user.selected_organization_id
             )
+            assert (
+                simulation.agents[SAKINAH_ROLE].resolved_user_config.tts.voice
+                == "sakinah-voice"
+            )
+            assert (
+                simulation.agents[SERVICE_USER_ROLE].resolved_user_config.tts.voice
+                == "service-user-voice"
+            )
             # Both fake pipelines emit their chunks; consecutive same-role
             # chunks aggregate into one turn per role.
             await _wait_for(lambda: simulation.turn_count >= 2)
@@ -215,9 +257,7 @@ async def test_simulation_lifecycle_start_events_stop(
             assert stopped["stop_reason"] == "user_stopped"
 
     # The merged, labelled transcript is saved as a session JSON.
-    saved = json.loads(
-        (Path(sessions_dir) / f"{simulation_id}.json").read_text()
-    )
+    saved = json.loads((Path(sessions_dir) / f"{simulation_id}.json").read_text())
     roles = {turn["role"] for turn in saved["turns"]}
     assert roles == {SAKINAH_ROLE, SERVICE_USER_ROLE}
     sakinah_run = snapshot["agents"][SAKINAH_ROLE]["workflow_run_id"]
@@ -285,9 +325,7 @@ async def test_watchdog_stops_simulation_at_max_duration(
     """The conversation cannot continue indefinitely: the watchdog ends it."""
     user = await _make_user(db_session, "sim_watchdog")
 
-    with patch(
-        "api.services.pipecat.run_pipeline._run_pipeline", new=_fake_pipeline()
-    ):
+    with patch("api.services.pipecat.run_pipeline._run_pipeline", new=_fake_pipeline()):
         simulation = await simulation_manager.start_simulation(
             user, SCENARIO, max_duration_seconds=1
         )
@@ -476,9 +514,7 @@ async def test_simulation_is_org_scoped(
     owner = await _make_user(db_session, "sim_owner")
     outsider = await _make_user(db_session, "sim_outsider")
 
-    with patch(
-        "api.services.pipecat.run_pipeline._run_pipeline", new=_fake_pipeline()
-    ):
+    with patch("api.services.pipecat.run_pipeline._run_pipeline", new=_fake_pipeline()):
         async with test_client_factory(owner) as client:
             response = await client.post(
                 "/api/v1/sakinah/simulations", json={"scenario": SCENARIO}

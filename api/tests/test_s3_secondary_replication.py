@@ -47,7 +47,9 @@ class _Secondary:
         if self.failures:
             self.failures -= 1
             raise self.error
-        self.uploads.append((destination_key, await asyncio.to_thread(Path(local_path).read_bytes)))
+        self.uploads.append(
+            (destination_key, await asyncio.to_thread(Path(local_path).read_bytes))
+        )
 
 
 @pytest.mark.asyncio
@@ -59,9 +61,7 @@ async def test_disabled_secondary_does_not_enqueue_or_initialize_s3(monkeypatch)
         lambda **kwargs: pytest.fail("S3 must not be initialized when disabled"),
     )
 
-    result = await replication.replicate_workflow_run_artifacts_to_s3(
-        None, 1, _refs()
-    )
+    result = await replication.replicate_workflow_run_artifacts_to_s3(None, 1, _refs())
 
     assert result["status"] == "disabled"
 
@@ -97,8 +97,37 @@ async def test_schedule_preserves_primary_keys_and_reports_pending(monkeypatch):
     assert result["status"] == "pending"
     assert result["objects"][0]["source_object_key"].startswith("recordings/")
     assert result["objects"][0]["object_key"].startswith("calmos/recordings/")
-    assert calls[0][0][0] == replication.FunctionNames.REPLICATE_WORKFLOW_RUN_ARTIFACTS_S3
+    assert (
+        calls[0][0][0] == replication.FunctionNames.REPLICATE_WORKFLOW_RUN_ARTIFACTS_S3
+    )
     assert calls[0][0][1] == 88
+
+
+def test_score_snapshots_are_selected_for_s3_replication():
+    refs = replication._artifact_refs(
+        {
+            "scores": {
+                "objects": [
+                    {
+                        "type": "calm_scores",
+                        "object_key": "scores/workflow-run-88/calm-turn-0001.json",
+                        "size_bytes": 128,
+                        "checksum_sha256": "a" * 64,
+                        "status": "success",
+                    }
+                ]
+            }
+        }
+    )
+
+    assert refs == [
+        {
+            "type": "calm_scores",
+            "object_key": "scores/workflow-run-88/calm-turn-0001.json",
+            "size_bytes": 128,
+            "checksum_sha256": "a" * 64,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -136,6 +165,7 @@ async def test_retry_then_success_does_not_change_primary(monkeypatch):
     monkeypatch.setattr(replication, "storage_fs", primary)
     monkeypatch.setattr(replication, "AWS_RECORDINGS_BUCKET", "private-test-bucket")
     monkeypatch.setattr(replication, "_log_replication_event", record_event)
+
     async def record_sleep(delay):
         sleeps.append(delay)
 
@@ -152,7 +182,9 @@ async def test_retry_then_success_does_not_change_primary(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", [PermissionError(), FileNotFoundError(), TimeoutError()])
+@pytest.mark.parametrize(
+    "error", [PermissionError(), FileNotFoundError(), TimeoutError()]
+)
 async def test_retry_exhaustion_isolated_and_classified(monkeypatch, error):
     primary = _Primary()
     secondary = _Secondary(failures=10, error=error)
@@ -164,6 +196,7 @@ async def test_retry_exhaustion_isolated_and_classified(monkeypatch, error):
     monkeypatch.setattr(replication, "storage_fs", primary)
     monkeypatch.setattr(replication, "AWS_RECORDINGS_BUCKET", "private-test-bucket")
     monkeypatch.setattr(replication, "_log_replication_event", record_event)
+
     async def skip_sleep(_delay):
         return None
 

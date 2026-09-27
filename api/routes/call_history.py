@@ -21,6 +21,8 @@ class CallReplayResponse(BaseModel):
     call_id: str
     agent_run_id: int
     recording_signed_url: str | None = None
+    recording_key: str | None = None
+    transcript_key: str | None = None
     expires_in: int = Field(ge=60, le=900)
     transcript: str | None = None
     utterances: list[dict[str, Any]] = Field(default_factory=list)
@@ -47,11 +49,13 @@ async def _build_replay_response(
     unavailable_tracks: list[str] = []
     recording_rows = record.get("recordings") or []
     if not recording_rows and record.get("recording_key"):
-        recording_rows = [{
-            "track": "mixed",
-            "storage_backend": record.get("storage_backend"),
-            "recording_key": record["recording_key"],
-        }]
+        recording_rows = [
+            {
+                "track": "mixed",
+                "storage_backend": record.get("storage_backend"),
+                "recording_key": record["recording_key"],
+            }
+        ]
     for recording in recording_rows:
         track = recording.get("track") or "mixed"
         track = "assistant" if track == "bot" else track
@@ -80,7 +84,8 @@ async def _build_replay_response(
 
     try:
         await db_client.record_audit_event(
-            organization_id=record.get("organization_id") or user.selected_organization_id,
+            organization_id=record.get("organization_id")
+            or user.selected_organization_id,
             workflow_run_id=record["agent_run_id"],
             service_user_id=record.get("service_user_id"),
             actor_user_id=getattr(user, "id", None),
@@ -95,12 +100,16 @@ async def _build_replay_response(
             },
         )
     except Exception as exc:
-        raise HTTPException(status_code=503, detail="Replay auditing is temporarily unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="Replay auditing is temporarily unavailable"
+        ) from exc
 
     return CallReplayResponse(
         call_id=record["call_id"],
         agent_run_id=record["agent_run_id"],
         recording_signed_url=signed_url,
+        recording_key=record.get("recording_key"),
+        transcript_key=record.get("transcript_key"),
         expires_in=expires_in,
         transcript=record.get("transcript"),
         utterances=record.get("utterances", []),

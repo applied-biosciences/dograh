@@ -34,7 +34,7 @@ export function MediaPreviewDialog() {
             setAudioSignedUrl(null);
             setTranscriptContent(null);
             setUnavailableRecordings([]);
-            setRecordingKey(callId ? null : recordingUrl);
+            setRecordingKey(recordingUrl);
             setTranscriptKey(transcriptUrl);
             setSelectedRunId(runId);
             setIsOpen(true);
@@ -48,6 +48,8 @@ export function MediaPreviewDialog() {
                         .map((item) => `${item.speaker}: ${item.transcript}`)
                         .join('\n');
                     setAudioSignedUrl(replay.recording_signed_url ?? fallbackRecording?.signed_url ?? null);
+                    setRecordingKey(replay.recording_key ?? recordingUrl);
+                    setTranscriptKey(replay.transcript_key ?? transcriptUrl);
                     setTranscriptContent(transcript || null);
                     setUnavailableRecordings(replay.unavailable_recordings ?? []);
                     posthog.capture(PostHogEvent.TRANSCRIPT_VIEWED, {

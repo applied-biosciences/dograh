@@ -4,6 +4,8 @@ export interface CallReplay {
     call_id: string;
     agent_run_id: number;
     recording_signed_url: string | null;
+    recording_key?: string | null;
+    transcript_key?: string | null;
     expires_in: number;
     transcript: string | null;
     calm_score: Record<string, unknown>;

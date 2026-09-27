@@ -73,6 +73,10 @@ from api.services.call_persistence import (
     extract_workflow_run_memories,
     persist_workflow_run_call_data,
 )
+from api.services.s3_secondary_replication import (
+    reconcile_pending_s3_replications,
+    replicate_workflow_run_artifacts_to_s3,
+)
 
 
 class WorkerSettings:
@@ -86,6 +90,7 @@ class WorkerSettings:
         complete_inactive_text_chat_session,
         persist_workflow_run_call_data,
         extract_workflow_run_memories,
+        replicate_workflow_run_artifacts_to_s3,
     ]
     cron_jobs = [
         # Safety net for webhook deliveries whose ARQ job was lost (worker
@@ -102,6 +107,14 @@ class WorkerSettings:
             sweep_inactive_text_chat_sessions,
             minute=set(range(0, 60, TEXT_CHAT_INACTIVITY_SWEEP_INTERVAL_MINUTES)),
             second=30,
+            run_at_startup=True,
+        ),
+        # Recover MinIO artifacts whose first S3 replication job was missed or
+        # failed during a worker restart. Replication is idempotent and bounded.
+        cron(
+            reconcile_pending_s3_replications,
+            minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55},
+            second=45,
             run_at_startup=True,
         ),
     ]

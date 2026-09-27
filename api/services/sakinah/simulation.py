@@ -6,7 +6,6 @@ pair; transcript events stream to browsers over a per-simulation event feed.
 """
 
 import asyncio
-import copy
 import uuid
 from collections import deque
 from datetime import UTC, datetime
@@ -76,20 +75,6 @@ def _simulation_workflow_configurations(workflow, definition) -> dict:
         return definition_config
     workflow_config = getattr(workflow, "workflow_configurations", None)
     return workflow_config if isinstance(workflow_config, dict) else {}
-
-
-def _has_tts_override(config: dict | None) -> bool:
-    if not isinstance(config, dict):
-        return False
-    v2_override = config.get("model_configuration_v2_override")
-    if isinstance(v2_override, dict):
-        pipeline = ((v2_override.get("byok") or {}).get("pipeline") or {})
-        if isinstance(pipeline.get("tts"), dict):
-            return True
-    model_overrides = config.get("model_overrides")
-    return isinstance(model_overrides, dict) and isinstance(
-        model_overrides.get("tts"), dict
-    )
 
 
 class SimulationAuthorizationError(Exception):
@@ -211,12 +196,14 @@ class Simulation:
             "ended_at": self.ended_at.isoformat() if self.ended_at else None,
             "turn_count": self.turn_count,
             "experiment_mode": self.experiment_mode,
-            "calm_scores": self.calm_runtime.turns[-1]["calm_scores"]
-            if self.calm_runtime.turns
-            else {},
-            "calm_trend": self.calm_runtime.turns[-1]["trend"]
-            if self.calm_runtime.turns
-            else {},
+            "calm_scores": (
+                self.calm_runtime.turns[-1]["calm_scores"]
+                if self.calm_runtime.turns
+                else {}
+            ),
+            "calm_trend": (
+                self.calm_runtime.turns[-1]["trend"] if self.calm_runtime.turns else {}
+            ),
             "agents": {
                 role: {
                     "workflow_id": agent.workflow_id,
@@ -353,7 +340,6 @@ class SimulationManager:
             (SAKINAH_ROLE, sakinah_workflow, sakinah_transport),
             (SERVICE_USER_ROLE, service_user_workflow, service_user_transport),
         ]
-        resolved_configs: dict[str, Any] = {}
         for role, workflow, transport in roles:
             initial_context = {
                 "scenario": scenario,
@@ -387,6 +373,7 @@ class SimulationManager:
                 call_type=CallType.INBOUND,
                 organization_id=user.selected_organization_id,
                 definition_id=run_inputs.definition_id,
+                use_draft=run_inputs.use_draft,
                 initial_context=run_inputs.initial_context,
             )
             # This is deliberately configuration metadata only.  It gives an
@@ -407,15 +394,6 @@ class SimulationManager:
                 organization_id=user.selected_organization_id,
                 workflow_configurations=workflow_configurations,
             )
-            if (
-                role == SERVICE_USER_ROLE
-                and not _has_tts_override(workflow_configurations)
-                and resolved_configs.get(SAKINAH_ROLE) is not None
-                and getattr(resolved_configs[SAKINAH_ROLE], "tts", None) is not None
-            ):
-                effective = copy.deepcopy(effective)
-                effective.tts = copy.deepcopy(resolved_configs[SAKINAH_ROLE].tts)
-            resolved_configs[role] = effective
             tts = effective.tts
             logger.info(
                 "Simulation role={} workflow_id={} definition_id={} "
@@ -423,7 +401,11 @@ class SimulationManager:
                 role,
                 workflow.id,
                 run_inputs.definition_id,
-                getattr(getattr(tts, "provider", None), "value", getattr(tts, "provider", None)),
+                getattr(
+                    getattr(tts, "provider", None),
+                    "value",
+                    getattr(tts, "provider", None),
+                ),
                 getattr(tts, "model", None),
                 getattr(tts, "voice", None),
             )
@@ -547,6 +529,23 @@ class SimulationManager:
                         "calm_trend": simulation.snapshot()["calm_trend"],
                     },
                 )
+                try:
+                    from api.services.workflow_run_artifacts import (
+                        persist_calm_score_snapshot,
+                    )
+
+                    await persist_calm_score_snapshot(
+                        simulation.agents[SAKINAH_ROLE].workflow_run_id,
+                        simulation.calm_runtime.turns,
+                    )
+                except Exception as exc:
+                    # PostgreSQL is authoritative and already committed above;
+                    # an object-store outage must not interrupt the call.
+                    logger.warning(
+                        "CALM object snapshot failed for simulation {} ({})",
+                        simulation.id,
+                        type(exc).__name__,
+                    )
             # Analysis is applied only to Sakinah's LLM. The service-user
             # workflow has its own context and never receives this callback.
             await engine._update_llm_context(turn["prompt_sent_to_llm"], [])
@@ -638,11 +637,9 @@ class SimulationManager:
             )
             if workflow_run is None:
                 raise RuntimeError("Evaluation workflow run is unavailable")
-            workflow_configurations = (
-                _simulation_workflow_configurations(
-                    workflow_run.workflow,
-                    workflow_run.definition,
-                )
+            workflow_configurations = _simulation_workflow_configurations(
+                workflow_run.workflow,
+                workflow_run.definition,
             )
             configuration = await get_effective_ai_model_configuration_for_workflow(
                 organization_id=simulation.organization_id,

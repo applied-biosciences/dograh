@@ -8,7 +8,9 @@ in storage.
 """
 
 import asyncio
+import hashlib
 import io
+import json
 import wave
 from datetime import UTC, datetime
 
@@ -63,7 +65,11 @@ async def _upload_bytes(
             )
         if attempt < 2:
             await asyncio.sleep(0.25 * (2**attempt))
-    logger.error("Storage upload failed after retries for workflow run {} ({})", workflow_run_id, label)
+    logger.error(
+        "Storage upload failed after retries for workflow run {} ({})",
+        workflow_run_id,
+        label,
+    )
     return False
 
 
@@ -117,7 +123,9 @@ async def _persist_run_fields(workflow_run_id: int, **fields) -> bool:
         await db_client.update_workflow_run(run_id=workflow_run_id, **fields)
         return True
     except Exception:
-        logger.warning("Artifact metadata write failed for workflow run {}", workflow_run_id)
+        logger.warning(
+            "Artifact metadata write failed for workflow run {}", workflow_run_id
+        )
         return False
 
 
@@ -183,11 +191,21 @@ async def upload_workflow_run_artifacts(
                 workflow_run_id, recordings_metadata["mixed"], update_run=True
             )
             audit["recordings"]["objects"].append(
-                {"type": "mixed", "object_key": recording_url, "size_bytes": len(mixed_audio_wav), "status": "success"}
+                {
+                    "type": "mixed",
+                    "object_key": recording_url,
+                    "size_bytes": len(mixed_audio_wav),
+                    "status": "success",
+                }
             )
         else:
             audit["recordings"]["objects"].append(
-                {"type": "mixed", "object_key": recording_url, "size_bytes": len(mixed_audio_wav), "status": "failed"}
+                {
+                    "type": "mixed",
+                    "object_key": recording_url,
+                    "size_bytes": len(mixed_audio_wav),
+                    "status": "failed",
+                }
             )
 
     if user_audio_wav:
@@ -205,11 +223,21 @@ async def upload_workflow_run_artifacts(
                 workflow_run_id, recordings_metadata["user"]
             )
             audit["recordings"]["objects"].append(
-                {"type": "user", "object_key": user_recording_url, "size_bytes": len(user_audio_wav), "status": "success"}
+                {
+                    "type": "user",
+                    "object_key": user_recording_url,
+                    "size_bytes": len(user_audio_wav),
+                    "status": "success",
+                }
             )
         else:
             audit["recordings"]["objects"].append(
-                {"type": "user", "object_key": user_recording_url, "size_bytes": len(user_audio_wav), "status": "failed"}
+                {
+                    "type": "user",
+                    "object_key": user_recording_url,
+                    "size_bytes": len(user_audio_wav),
+                    "status": "failed",
+                }
             )
 
     if bot_audio_wav:
@@ -227,11 +255,21 @@ async def upload_workflow_run_artifacts(
                 workflow_run_id, recordings_metadata["bot"]
             )
             audit["recordings"]["objects"].append(
-                {"type": "bot", "object_key": bot_recording_url, "size_bytes": len(bot_audio_wav), "status": "success"}
+                {
+                    "type": "bot",
+                    "object_key": bot_recording_url,
+                    "size_bytes": len(bot_audio_wav),
+                    "status": "success",
+                }
             )
         else:
             audit["recordings"]["objects"].append(
-                {"type": "bot", "object_key": bot_recording_url, "size_bytes": len(bot_audio_wav), "status": "failed"}
+                {
+                    "type": "bot",
+                    "object_key": bot_recording_url,
+                    "size_bytes": len(bot_audio_wav),
+                    "status": "failed",
+                }
             )
 
     if recordings_metadata:
@@ -258,23 +296,26 @@ async def upload_workflow_run_artifacts(
                 storage_backend=storage_backend.value,
                 full_transcript=transcript_text,
             )
-            audit["transcript"].update({"object_key": transcript_url, "status": "success"})
+            audit["transcript"].update(
+                {"object_key": transcript_url, "status": "success"}
+            )
         else:
-            audit["transcript"].update({"object_key": transcript_url, "status": "failed"})
+            audit["transcript"].update(
+                {"object_key": transcript_url, "status": "failed"}
+            )
 
     recording_objects = audit["recordings"]["objects"]
     if recording_objects:
         audit["recordings"]["status"] = (
-            "success" if all(item["status"] == "success" for item in recording_objects)
+            "success"
+            if all(item["status"] == "success" for item in recording_objects)
             else "partial"
         )
     primary_objects = [*recording_objects]
     if audit["transcript"]["status"] != "not_expected":
         primary_objects.append(audit["transcript"])
     audit["artifact_count"] = len(primary_objects)
-    audit["postgres"]["status"] = (
-        "verified" if audit["postgres_saved"] else "failed"
-    )
+    audit["postgres"]["status"] = "verified" if audit["postgres_saved"] else "failed"
     audit["overall_primary_status"] = (
         "partial"
         if not audit["postgres_saved"]
@@ -285,3 +326,62 @@ async def upload_workflow_run_artifacts(
     audit["s3"] = await schedule_s3_replication(workflow_run_id, audit)
     _log_storage_audit(audit)
     return audit
+
+
+async def persist_calm_score_snapshot(
+    workflow_run_id: int, calm_turns: list[dict]
+) -> dict:
+    """Persist an immutable, content-minimized in-progress CALM score snapshot.
+
+    PostgreSQL remains the queryable source of truth. This object copy makes
+    each completed score turn available in MinIO and, when configured, S3.
+    Utterances, prompts, and generated responses are deliberately excluded.
+    """
+    run = await db_client.get_workflow_run_by_id(workflow_run_id)
+    if run is None or not calm_turns:
+        return {"status": "not_expected"}
+    last_turn = calm_turns[-1]
+    score_data = {
+        "workflow_run_id": workflow_run_id,
+        "turn_id": last_turn.get("turn_id"),
+        "calm_scores": last_turn.get("calm_scores") or {},
+        "calm_confidence": last_turn.get("calm_confidence") or {},
+        "trend": last_turn.get("trend") or {},
+        "significant_changes": last_turn.get("significant_changes") or {},
+    }
+    payload = json.dumps(score_data, sort_keys=True, separators=(",", ":")).encode()
+    storage_backend = get_current_storage_backend()
+    turn_id = int(last_turn.get("turn_id") or len(calm_turns))
+    object_key = f"scores/workflow-run-{workflow_run_id}/calm-turn-{turn_id:04d}.json"
+    if not await _upload_bytes(
+        workflow_run_id, payload, object_key, "CALM score snapshot"
+    ):
+        return {"status": "failed", "object_key": object_key}
+    checksum = hashlib.sha256(payload).hexdigest()
+    audit = {
+        "run_id": workflow_run_id,
+        "storage_backend": storage_backend.value,
+        "scores": {
+            "bucket": getattr(storage_fs, "bucket_name", None),
+            "objects": [
+                {
+                    "type": "calm_scores",
+                    "object_key": object_key,
+                    "size_bytes": len(payload),
+                    "checksum_sha256": checksum,
+                    "status": "success",
+                }
+            ],
+        },
+    }
+    secondary = await schedule_s3_replication(
+        workflow_run_id, audit, job_suffix=f"calm-{turn_id}"
+    )
+    logger.info(
+        "Persisted CALM snapshot run_id={} turn_id={} backend={} secondary_status={}",
+        workflow_run_id,
+        turn_id,
+        storage_backend.value,
+        secondary.get("status"),
+    )
+    return {"status": "success", "object_key": object_key, "secondary": secondary}
