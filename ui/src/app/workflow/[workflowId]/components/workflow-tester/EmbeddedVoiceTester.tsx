@@ -5,12 +5,16 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { createOrUpdateEmbedTokenApiV1WorkflowWorkflowIdEmbedTokenPost } from "@/client/sdk.gen";
+import {
+    createOrUpdateEmbedTokenApiV1WorkflowWorkflowIdEmbedTokenPost,
+    getWorkflowRunApiV1WorkflowWorkflowIdRunsRunIdGet,
+} from "@/client/sdk.gen";
 import { SpatialAvatarPanel } from "@/components/avatar/SpatialAvatarPanel";
 import { Button } from "@/components/ui/button";
 import { RealtimeFeedback } from "@/components/workflow/conversation";
 import { copyTextToClipboard } from "@/lib/clipboard";
 
+import { CalmScoreTimelineSection, type CalmScoreTimeline } from "../../run/[runId]/components/CalmScoreTimeline";
 import { ApiKeyErrorDialog, ConnectionStatus, WorkflowConfigErrorDialog } from "../../run/[runId]/components";
 import { useWebSocketRTC } from "../../run/[runId]/hooks";
 import type { WorkflowRuntimeNodeTransition } from "./types";
@@ -120,6 +124,29 @@ export function EmbeddedVoiceTester({
     });
     const autoStartedRef = useRef(false);
     const configRetriedRef = useRef(false);
+    const [calmTimeline, setCalmTimeline] = useState<CalmScoreTimeline | null>(null);
+
+    // Browser Agent Run Tests and inbound WebRTC share the authenticated,
+    // persisted Run Details contract; no call text crosses this score panel.
+    useEffect(() => {
+        if (!connectionActive && !isCompleted) return;
+        let cancelled = false;
+        const refreshCalmTimeline = async () => {
+            const response = await getWorkflowRunApiV1WorkflowWorkflowIdRunsRunIdGet({
+                path: { workflow_id: workflowId, run_id: workflowRunId },
+            });
+            if (!cancelled && !response.error) {
+                const data = response.data as (typeof response.data & { calm_score_timeline?: CalmScoreTimeline }) | undefined;
+                setCalmTimeline(data?.calm_score_timeline ?? null);
+            }
+        };
+        void refreshCalmTimeline();
+        const interval = window.setInterval(() => void refreshCalmTimeline(), 2000);
+        return () => {
+            cancelled = true;
+            window.clearInterval(interval);
+        };
+    }, [connectionActive, isCompleted, workflowId, workflowRunId]);
 
     useEffect(() => {
         // Wait for appConfig (FORCE_TURN_RELAY) to finish loading before
@@ -258,6 +285,15 @@ export function EmbeddedVoiceTester({
                         isCallCompleted={isCompleted}
                     />
                 </div>
+                {(connectionActive || isCompleted || calmTimeline) && (
+                    <div className="max-h-80 overflow-y-auto border-t border-border/70 bg-background p-3">
+                        <CalmScoreTimelineSection
+                            timeline={calmTimeline ?? { session_id: String(workflowRunId), status: connectionActive ? 'running' : 'completed', roles: [] }}
+                            title="Live CALM scores"
+                            emptyMessage="Waiting for the first completed score turn. Scores are saved incrementally without call text."
+                        />
+                    </div>
+                )}
 
                 <div className="border-t border-border/70 bg-background px-4 py-3">
                     <div className="flex flex-col gap-3">

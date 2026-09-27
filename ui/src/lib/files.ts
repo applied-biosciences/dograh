@@ -40,8 +40,12 @@ export function downloadSignedUrl(url: string | null) {
 }
 
 /** Download the SQL-backed transcript when its object-store copy is unavailable. */
-export function downloadTextFile(text: string, filename: string) {
-    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+export function downloadTextFile(
+    text: string,
+    filename: string,
+    contentType: string = "text/plain;charset=utf-8",
+) {
+    const blob = new Blob([text], { type: contentType });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;

@@ -1,5 +1,16 @@
 # Changelog
 
+## Sakinah v1.47.0.14 (2026-09-27)
+
+- Added live authenticated CALM score histories for browser Agent Run Tests,
+  inbound WebRTC, and incoming phone-run Details, refreshing during an active
+  call and remaining at the bottom after completion.
+- Added authorized score-history JSON downloads. Exports are deliberately
+  projected to numeric score/confidence values and safe run metadata only.
+- Added previous-turn trend deltas (`↑ +n`, `= 0`, `↓ -n`) and versioned,
+  timestamped score-only MinIO snapshots with existing S3 replication.
+- Bumped release metadata to `v1.47.0.14`.
+
 ## Sakinah v1.47.0.13 (2026-09-27)
 
 - Extended CALM scoring from AI-to-AI simulations to standard browser Agent Run

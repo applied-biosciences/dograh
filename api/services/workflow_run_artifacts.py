@@ -343,10 +343,12 @@ async def persist_calm_score_snapshot(
         return {"status": "not_expected"}
     last_turn = calm_turns[-1]
     score_data = {
+        "artifact_kind": "dograh-calm-score-snapshot/v1",
         "workflow_run_id": workflow_run_id,
         "turn_id": last_turn.get("turn_id"),
         "role": last_turn.get("role") or role,
         "scoring_method": last_turn.get("scoring_method"),
+        "scored_at": last_turn.get("scored_at"),
         "calm_scores": last_turn.get("calm_scores") or {},
         "calm_confidence": last_turn.get("calm_confidence") or {},
         "trend": last_turn.get("trend") or {},

@@ -798,9 +798,33 @@ export default function WorkflowRunPage() {
         fetchWorkflowRun();
     }, [params.workflowId, params.runId, auth]);
 
+    // Phone callers have no signaling WebSocket into Run Details. Refresh the
+    // same authorized score-only timeline while an inbound call remains live.
+    useEffect(() => {
+        if (!auth.isAuthenticated || auth.loading || !workflowRun || workflowRun.is_completed) return;
+        const workflowId = Number(params.workflowId);
+        const runId = Number(params.runId);
+        let cancelled = false;
+        const refreshLiveRun = async () => {
+            const response = await getWorkflowRunApiV1WorkflowWorkflowIdRunsRunIdGet({ path: { workflow_id: workflowId, run_id: runId } });
+            if (cancelled || response.error || !response.data) return;
+            const data = response.data as typeof response.data & { calm_score_timeline?: CalmScoreTimeline };
+            setWorkflowRun((current) => current ? {
+                ...current,
+                is_completed: data.is_completed ?? current.is_completed,
+                calm_score_timeline: data.calm_score_timeline ?? null,
+            } : current);
+        };
+        const interval = window.setInterval(() => void refreshLiveRun(), 2000);
+        return () => {
+            cancelled = true;
+            window.clearInterval(interval);
+        };
+    }, [auth.isAuthenticated, auth.loading, params.workflowId, params.runId, workflowRun?.is_completed]);
+
     let returnValue = null;
     const isTextChatRun = workflowRun?.mode === WORKFLOW_RUN_MODES.TEXTCHAT;
-    const showRunDetailsView = Boolean(workflowRun?.is_completed || isTextChatRun);
+    const showRunDetailsView = Boolean(workflowRun);
     const userSplitRecordingUrl = workflowRun?.user_recording_url ?? null;
     const botSplitRecordingUrl = workflowRun?.bot_recording_url ?? null;
     const hasSplitTracks = Boolean(userSplitRecordingUrl && botSplitRecordingUrl);
@@ -858,7 +882,7 @@ export default function WorkflowRunPage() {
                                 </div>
                                 <div className="flex min-w-0 items-center gap-4 pt-1">
                                     <CardTitle className="min-w-0 text-2xl">
-                                        {isTextChatRun ? 'Text Chat Session' : 'Agent Run Completed'}
+                                        {isTextChatRun ? 'Text Chat Session' : workflowRun?.is_completed ? 'Agent Run Completed' : 'Agent Run In Progress'}
                                     </CardTitle>
                                     <div className={`h-8 w-8 rounded-full flex items-center justify-center ${isTextChatRun ? 'bg-sky-500/15' : 'bg-emerald-500/20'}`}>
                                         {isTextChatRun ? (
@@ -895,7 +919,9 @@ export default function WorkflowRunPage() {
                             <p className="text-muted-foreground mb-8">
                                 {isTextChatRun
                                     ? 'Review the conversation history, metrics, and context captured for this text session.'
-                                    : 'Your voice agent run has been completed successfully. You can preview or download the transcript and recording.'}
+                                    : workflowRun?.is_completed
+                                        ? 'Your voice agent run has been completed successfully. You can preview or download the transcript and recording.'
+                                        : 'This incoming call is active. CALM scores refresh as completed turns are evaluated.'}
                             </p>
 
                             <div className="flex flex-wrap gap-4">
@@ -1003,8 +1029,11 @@ export default function WorkflowRunPage() {
                             />
                         )}
 
-                        {workflowRun?.calm_score_timeline && (
-                            <CalmScoreTimelineSection timeline={workflowRun.calm_score_timeline} />
+                        {!isTextChatRun && (workflowRun?.calm_score_timeline || !workflowRun?.is_completed) && (
+                            <CalmScoreTimelineSection
+                                timeline={workflowRun?.calm_score_timeline ?? { session_id: runId, status: 'running', roles: [] }}
+                                emptyMessage="Waiting for the first completed score turn. This view refreshes while the call is active."
+                            />
                         )}
                     </div>
                 </div>
