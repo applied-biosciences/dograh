@@ -1,6 +1,6 @@
 # Dograh AI
 
-> **CALMOS Connect / Sakinah v1.47.0.10** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): preserves independent draft-aware Sakinah and Service User voices, deterministically selects configured simulation voices even when duplicate seeded workflows exist, publishes live CALM scores independently of storage health, streams CALM progress to PostgreSQL, MinIO, and the configured AWS S3 replica, verifies replica state in Run Details, and enables downloads from canonical artifact keys. Compose supports an explicitly configured external `DATABASE_URL`; it defaults to bundled PostgreSQL and must only be pointed at a database provisioned for Dograh. The AWS deployment is served at [`voice.calmos.io`](https://voice.calmos.io). See [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
+> **CALMOS Connect / Sakinah v1.47.0.11** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): preserves independent draft-aware Sakinah and Service User voices, deterministically selects configured simulation voices even when duplicate seeded workflows exist, streams role-labelled per-turn CALM scores to PostgreSQL, MinIO, and the configured AWS S3 replica, and keeps an authorized SQL transcript download available when a legacy object key is absent. Compose supports an explicitly configured external `DATABASE_URL`; it defaults to bundled PostgreSQL and must only be pointed at a database provisioned for Dograh. The AWS deployment is served at [`voice.calmos.io`](https://voice.calmos.io). See [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
 > **Deployment limitation**: run the API with a **single worker** (`FASTAPI_WORKERS=1`, the default). Simulations keep in-process state, so with multiple workers the simulation status/stop endpoints and the transcript/audio WebSockets intermittently land on a worker that doesn't own the simulation ([#4](https://github.com/applied-biosciences/dograh/issues/4)).
 
 <p align="center">
@@ -11,7 +11,7 @@
 
 **The open-source, self-hostable alternative to Vapi & Retell** — build production voice agents with a visual workflow builder, test them in minutes, and let AI coding assistants help design and edit them through MCP.
 
-> **Sakinah distribution:** this checkout packages the compatible `v1.47.0.10` release, based on upstream Dograh `dograh-v1.47.0`. Production images must be built for `linux/amd64`; deployment and local smoke-test instructions are maintained in the accompanying Sakinah deployment bundle.
+> **Sakinah distribution:** this checkout packages the compatible `v1.47.0.11` release, based on upstream Dograh `dograh-v1.47.0`. Production images must be built for `linux/amd64`; deployment and local smoke-test instructions are maintained in the accompanying Sakinah deployment bundle.
 
 <p align="center">
   <a href="https://app.dograh.com">

@@ -1,18 +1,21 @@
 import asyncio
 import json
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, sentinel
 
 import pytest
 from pydantic import ValidationError
 
 from api.services.sakinah.calm_evaluation import (
     CalmEvaluator,
+    EVALUATION_MAX_TOKENS,
     ServiceUserAssessment,
     ServiceUserEvaluationResult,
     calculate_service_user_trends,
     calculate_trend,
     parse_sakinah_evaluation,
     parse_service_user_evaluation,
+    run_llm_inference,
 )
 from api.services.sakinah.simulation import Simulation, SimulationManager
 
@@ -225,3 +228,37 @@ async def test_calm_evaluator_rejects_malformed_provider_output():
             turns=[{"role": "service_user", "text": "I am struggling."}],
         )
 
+
+async def test_turn_evaluation_reserves_enough_output_for_the_strict_schema():
+    llm = AsyncMock()
+    llm.run_inference.return_value = "{}"
+
+    await run_llm_inference(llm, [{"role": "user", "content": "hello"}], "prompt")
+
+    assert llm.run_inference.await_args.kwargs["max_tokens"] == EVALUATION_MAX_TOKENS
+    assert EVALUATION_MAX_TOKENS >= 8000
+
+
+async def test_evaluation_llm_uses_pinned_run_configuration_without_lazy_loading(
+    monkeypatch,
+):
+    """Regression for the production DetachedInstanceError on every turn."""
+    simulation = Simulation("sim-1", 1, "Scenario", 300)
+    configuration = SimpleNamespace(llm=object())
+    simulation.agents["sakinah"] = SimpleNamespace(
+        resolved_user_config=configuration,
+        initial_context={"mps_correlation_id": "correlation-1"},
+    )
+    factory = Mock(return_value=sentinel.evaluation_llm)
+    monkeypatch.setattr(
+        "api.services.pipecat.service_factory.create_llm_service", factory
+    )
+
+    result = await SimulationManager()._get_evaluation_llm(simulation)
+
+    assert result is sentinel.evaluation_llm
+    factory.assert_called_once_with(
+        configuration,
+        correlation_id="correlation-1",
+        usage_context="calm_evaluation",
+    )

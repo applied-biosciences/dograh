@@ -38,7 +38,7 @@ import { useOrganizationTimezone } from '@/hooks/useOrganizationTimezone';
 import { useAuth } from '@/lib/auth';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { formatDateTime } from '@/lib/dateTime';
-import { downloadFile, getSignedUrl } from '@/lib/files';
+import { downloadFile, downloadTextFile, getSignedUrl } from '@/lib/files';
 import { cn } from '@/lib/utils';
 
 type StorageStatus = 'verified' | 'missing' | 'pending' | 'not_expected' | 'not_configured' | 'unknown';
@@ -73,6 +73,7 @@ interface WorkflowRunResponse {
     recording_url: string | null;
     user_recording_url: string | null;
     bot_recording_url: string | null;
+    full_transcript: string | null;
     cost_info: {
         dograh_token_usage?: number | null;
         call_duration_seconds?: number | null;
@@ -768,6 +769,7 @@ export default function WorkflowRunPage() {
                     recording_url: runResponse.data?.recording_url ?? null,
                     user_recording_url: runResponse.data?.user_recording_url ?? null,
                     bot_recording_url: runResponse.data?.bot_recording_url ?? null,
+                    full_transcript: runResponse.data?.full_transcript ?? null,
                     cost_info: runResponse.data?.cost_info ?? null,
                     initial_context: runResponse.data?.initial_context as Record<string, string> | null ?? null,
                     gathered_context: runResponse.data?.gathered_context as Record<string, string> | null ?? null,
@@ -907,8 +909,19 @@ export default function WorkflowRunPage() {
                                         <div className="flex items-center gap-2 border-l border-border pl-4">
                                             <span className="text-sm text-muted-foreground">Download:</span>
                                             <Button
-                                                onClick={() => downloadFile(workflowRun?.transcript_url ?? null)}
-                                                disabled={!workflowRun?.transcript_url || !auth.isAuthenticated}
+                                                onClick={() => {
+                                                    if (workflowRun?.transcript_url) {
+                                                        void downloadFile(workflowRun.transcript_url);
+                                                        return;
+                                                    }
+                                                    if (workflowRun?.full_transcript) {
+                                                        downloadTextFile(
+                                                            workflowRun.full_transcript,
+                                                            `run-${params.runId}-transcript.txt`,
+                                                        );
+                                                    }
+                                                }}
+                                                disabled={!(workflowRun?.transcript_url || workflowRun?.full_transcript) || !auth.isAuthenticated}
                                                 size="sm"
                                                 className="gap-2"
                                             >

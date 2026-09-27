@@ -1,5 +1,20 @@
 # Changelog
 
+## Sakinah v1.47.0.11 (2026-09-27)
+
+- Raised the bounded per-turn evaluator output budget and timeout so complete
+  strict caller and Sakinah assessment JSON is not truncated and reduced to
+  the misleading “Evaluation unavailable” transcript label.
+- Confirmed the independent score pipeline: caller rule-based CALM and
+  completed role evaluations are streamed during the simulation, written to
+  the authorized PostgreSQL Sakinah run, saved as score-only MinIO objects,
+  and queued for the configured AWS S3 replica. No survey RDS is used.
+- Restored the Run Details Transcript download for legacy or partially
+  finalized runs that retain only the authorized SQL `full_transcript`; object
+  backed transcripts and recordings continue to use the signed download path.
+- Bumped application, UI package/lockfile, Helm app, and release metadata to
+  `v1.47.0.11`.
+
 ## Sakinah v1.47.0.10 (2026-09-27)
 
 - Fixed Run Details downloads when legacy recording/transcript URL columns are

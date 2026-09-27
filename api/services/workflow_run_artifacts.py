@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import io
 import json
+import re
 import wave
 from datetime import UTC, datetime
 
@@ -329,7 +330,7 @@ async def upload_workflow_run_artifacts(
 
 
 async def persist_calm_score_snapshot(
-    workflow_run_id: int, calm_turns: list[dict]
+    workflow_run_id: int, calm_turns: list[dict], role: str | None = None
 ) -> dict:
     """Persist an immutable, content-minimized in-progress CALM score snapshot.
 
@@ -344,6 +345,8 @@ async def persist_calm_score_snapshot(
     score_data = {
         "workflow_run_id": workflow_run_id,
         "turn_id": last_turn.get("turn_id"),
+        "role": last_turn.get("role") or role,
+        "scoring_method": last_turn.get("scoring_method"),
         "calm_scores": last_turn.get("calm_scores") or {},
         "calm_confidence": last_turn.get("calm_confidence") or {},
         "trend": last_turn.get("trend") or {},
@@ -351,8 +354,13 @@ async def persist_calm_score_snapshot(
     }
     payload = json.dumps(score_data, sort_keys=True, separators=(",", ":")).encode()
     storage_backend = get_current_storage_backend()
-    turn_id = int(last_turn.get("turn_id") or len(calm_turns))
-    object_key = f"scores/workflow-run-{workflow_run_id}/calm-turn-{turn_id:04d}.json"
+    raw_turn_id = last_turn.get("turn_id") or len(calm_turns)
+    turn_id = re.sub(r"[^A-Za-z0-9_-]", "", str(raw_turn_id)) or str(len(calm_turns))
+    role_name = re.sub(r"[^A-Za-z0-9_-]", "", str(role or last_turn.get("role") or ""))
+    role_prefix = f"{role_name}-" if role_name else ""
+    object_key = (
+        f"scores/workflow-run-{workflow_run_id}/calm-{role_prefix}turn-{turn_id}.json"
+    )
     if not await _upload_bytes(
         workflow_run_id, payload, object_key, "CALM score snapshot"
     ):
@@ -375,7 +383,7 @@ async def persist_calm_score_snapshot(
         },
     }
     secondary = await schedule_s3_replication(
-        workflow_run_id, audit, job_suffix=f"calm-{turn_id}"
+        workflow_run_id, audit, job_suffix=f"calm-{role_prefix}{turn_id}"
     )
     logger.info(
         "Persisted CALM snapshot run_id={} turn_id={} backend={} secondary_status={}",

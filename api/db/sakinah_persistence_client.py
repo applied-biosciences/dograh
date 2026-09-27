@@ -40,6 +40,7 @@ SCENARIO_FIELDS = (
 
 def _structured_call_scores(
     calm_turns: list[dict[str, Any]] | None,
+    role: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Project CALM turns without copying prompts or transcript text."""
     calm: list[dict[str, Any]] = []
@@ -48,10 +49,14 @@ def _structured_call_scores(
     for turn in calm_turns or []:
         if not isinstance(turn, dict):
             continue
+        turn_role = turn.get("role") or "service_user"
+        if role is not None and turn_role != role:
+            continue
         turn_id = turn.get("turn_id")
         calm.append(
             {
                 "turn_id": turn_id,
+                "role": turn_role,
                 "scores": turn.get("calm_scores") or {},
                 "confidence": turn.get("calm_confidence") or {},
                 "trend": turn.get("trend") or {},
@@ -59,15 +64,50 @@ def _structured_call_scores(
             }
         )
         safety.append(
-            {"turn_id": turn_id, "safety_state": turn.get("safety_state") or {}}
+            {
+                "turn_id": turn_id,
+                "role": turn_role,
+                "safety_state": turn.get("safety_scores") or turn.get("safety_state") or {},
+            }
         )
         clinical.append(
             {
                 "turn_id": turn_id,
+                "role": turn_role,
                 "clinical_evaluation": turn.get("clinical_evaluation") or {},
             }
         )
     return {"turns": calm}, {"turns": safety}, {"turns": clinical}
+
+
+async def _upsert_role_call_scores(
+    session,
+    workflow_run_id: int | None,
+    calm_turns: list[dict[str, Any]],
+    role: str,
+) -> None:
+    if workflow_run_id is None:
+        return
+    calm_score, safety_score, clinical_evaluation = _structured_call_scores(
+        calm_turns, role=role
+    )
+    result = await session.execute(
+        select(CallScoreModel).where(CallScoreModel.agent_run_id == workflow_run_id)
+    )
+    call_score = result.scalars().first()
+    if call_score is None:
+        session.add(
+            CallScoreModel(
+                agent_run_id=workflow_run_id,
+                calm_score=calm_score,
+                safety_score=safety_score,
+                clinical_evaluation=clinical_evaluation,
+            )
+        )
+    else:
+        call_score.calm_score = calm_score
+        call_score.safety_score = safety_score
+        call_score.clinical_evaluation = clinical_evaluation
 
 
 def _scenario_dict(scenario: SakinahScenarioModel) -> dict[str, Any]:

@@ -77,6 +77,74 @@ def _simulation_workflow_configurations(workflow, definition) -> dict:
     return workflow_config if isinstance(workflow_config, dict) else {}
 
 
+def _score_record_from_evaluation(result: Any) -> dict[str, Any]:
+    """Keep only role-labelled numeric evaluation output for durable storage."""
+    payload = result.model_dump(mode="json")
+    role = payload.get("role")
+    score_fields = (
+        ("state", "safety")
+        if role == SERVICE_USER_ROLE
+        else ("response_quality", "safety_evaluation")
+    )
+    scores: dict[str, int | float] = {}
+    confidence: dict[str, int | float] = {}
+
+    def collect(value: Any, path: tuple[str, ...] = ()) -> None:
+        if not isinstance(value, dict):
+            return
+        if isinstance(value.get("score"), (int, float)):
+            name = ".".join(path)
+            scores[name] = value["score"]
+            if isinstance(value.get("confidence"), (int, float)):
+                confidence[name] = value["confidence"]
+            return
+        for key, child in value.items():
+            collect(child, (*path, str(key)))
+
+    for field in score_fields:
+        collect(payload.get(field), (field,))
+    return {
+        "role": role,
+        "turn_id": payload.get("turn_id"),
+        "scoring_method": "llm_evaluation",
+        "calm_scores": scores,
+        "calm_confidence": confidence,
+        "trend": payload.get("trend") or {},
+        "scored_at": payload.get("evaluated_at") or datetime.now(UTC).isoformat(),
+    }
+
+
+def _score_record_from_calm_turn(turn: dict[str, Any]) -> dict[str, Any]:
+    """Project caller CALM values to score-only fields, excluding transcript text."""
+    raw_trend = turn.get("trend") or {}
+    parameters = raw_trend.get("parameters") or {}
+    trend = {
+        "parameters": {
+            name: {
+                key: value.get(key)
+                for key in (
+                    "current_score",
+                    "previous_score",
+                    "delta_previous",
+                    "direction",
+                )
+                if key in value
+            }
+            for name, value in parameters.items()
+            if isinstance(value, dict)
+        }
+    }
+    return {
+        "role": SERVICE_USER_ROLE,
+        "turn_id": turn.get("turn_id"),
+        "scoring_method": "rule_based_calm",
+        "calm_scores": turn.get("calm_scores") or {},
+        "calm_confidence": turn.get("calm_confidence") or {},
+        "trend": trend,
+        "scored_at": datetime.now(UTC).isoformat(),
+    }
+
+
 class SimulationAuthorizationError(Exception):
     """A workflow run could not be authorized (quota/credits/config)."""
 
@@ -93,6 +161,7 @@ class SimulationAgent:
         resolved_user_config: Any | None = None,
         definition_id: int | None = None,
         resolved_tts: dict[str, Any] | None = None,
+        initial_context: dict[str, Any] | None = None,
     ):
         self.role = role
         self.workflow_id = workflow_id
@@ -107,6 +176,7 @@ class SimulationAgent:
         # fields. This lets an operator verify which per-role voice actually
         # started without exposing provider credentials.
         self.resolved_tts = resolved_tts or {}
+        self.initial_context = initial_context or {}
         self.pipeline_task: Optional[asyncio.Task] = None
 
 
@@ -147,6 +217,8 @@ class Simulation:
         self.audio_backlog: deque[bytes] = deque(maxlen=AUDIO_BACKLOG_MAX_CHUNKS)
         self.watchdog_task: Optional[asyncio.Task] = None
         self.completed_turns: list[dict] = []
+        self.calm_score_turns: list[dict[str, Any]] = []
+        self._calm_persistence_lock = asyncio.Lock()
         self.active_turns: dict[str, dict] = {}
         self.evaluation_tasks: set[asyncio.Task] = set()
         self.evaluator: CalmEvaluator | None = None
@@ -434,6 +506,7 @@ class SimulationManager:
                     "model": getattr(tts, "model", None),
                     "voice": getattr(tts, "voice", None),
                 },
+                initial_context=run_inputs.initial_context,
             )
 
         # Authorize both runs before any billable runtime starts (mirrors the
@@ -555,38 +628,9 @@ class SimulationManager:
             # the prompt/transcript that produced them. Each destination is
             # best-effort and independent so one failing store cannot suppress
             # the others or the UI event above.
-            if simulation.user_id is not None:
-                try:
-                    await db_client.update_sakinah_run_progress(
-                        user_id=simulation.user_id,
-                        session_id=simulation.id,
-                        calm_turns=simulation.calm_runtime.turns,
-                        preview_data={
-                            "calm_scores": simulation.snapshot()["calm_scores"],
-                            "calm_trend": simulation.snapshot()["calm_trend"],
-                        },
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "CALM database snapshot failed for simulation {} ({})",
-                        simulation.id,
-                        type(exc).__name__,
-                    )
-                try:
-                    from api.services.workflow_run_artifacts import (
-                        persist_calm_score_snapshot,
-                    )
-
-                    await persist_calm_score_snapshot(
-                        simulation.agents[SAKINAH_ROLE].workflow_run_id,
-                        simulation.calm_runtime.turns,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "CALM object snapshot failed for simulation {} ({})",
-                        simulation.id,
-                        type(exc).__name__,
-                    )
+            score_turn = _score_record_from_calm_turn(turn)
+            simulation.calm_score_turns.append(score_turn)
+            await self._persist_role_score_turn(simulation, score_turn)
 
         return prepare_prompt
 
@@ -654,32 +698,22 @@ class SimulationManager:
             if simulation._evaluation_llm is not None:
                 return simulation._evaluation_llm
 
-            from api.services.configuration.ai_model_configuration import (
-                get_effective_ai_model_configuration_for_workflow,
-            )
             from api.services.managed_model_services import get_mps_correlation_id
             from api.services.pipecat.service_factory import create_llm_service
 
             agent = simulation.agents[SAKINAH_ROLE]
-            workflow_run = await db_client.get_workflow_run(
-                agent.workflow_run_id,
-                organization_id=simulation.organization_id,
-            )
-            if workflow_run is None:
-                raise RuntimeError("Evaluation workflow run is unavailable")
-            workflow_configurations = _simulation_workflow_configurations(
-                workflow_run.workflow,
-                workflow_run.definition,
-            )
-            configuration = await get_effective_ai_model_configuration_for_workflow(
-                organization_id=simulation.organization_id,
-                workflow_configurations=workflow_configurations,
-            )
+            # The run returned by db_client is detached after its session
+            # closes. Resolve evaluation from the already-pinned configuration
+            # instead of lazy-loading workflow/definition relationships from
+            # this background task.
+            configuration = agent.resolved_user_config
+            if configuration is None:
+                raise RuntimeError("Pinned Sakinah model configuration is unavailable")
             if configuration.llm is None:
                 raise RuntimeError("No text LLM is configured for evaluation")
             simulation._evaluation_llm = create_llm_service(
                 configuration,
-                correlation_id=get_mps_correlation_id(workflow_run.initial_context),
+                correlation_id=get_mps_correlation_id(agent.initial_context),
                 usage_context="calm_evaluation",
             )
             return simulation._evaluation_llm
@@ -758,6 +792,57 @@ class SimulationManager:
                 "timestamp": datetime.now(UTC).isoformat(),
             }
         )
+        if payload["status"] == "completed" and payload["result"] is not None:
+            score_turn = _score_record_from_evaluation(result)
+            simulation.calm_score_turns.append(score_turn)
+            await self._persist_role_score_turn(simulation, score_turn)
+
+    async def _persist_role_score_turn(
+        self, simulation: Simulation, score_turn: dict[str, Any]
+    ) -> None:
+        """Persist each role's score in Postgres and its own run artifacts."""
+        role = score_turn.get("role")
+        agent = simulation.agents.get(role)
+        if agent is None or simulation.user_id is None:
+            return
+        role_turns = [
+            turn for turn in simulation.calm_score_turns if turn.get("role") == role
+        ]
+        async with simulation._calm_persistence_lock:
+            try:
+                await db_client.update_sakinah_run_progress(
+                    user_id=simulation.user_id,
+                    session_id=simulation.id,
+                    calm_turns=simulation.calm_score_turns,
+                    preview_data={
+                        "calm_scores": simulation.snapshot()["calm_scores"],
+                        "calm_trend": simulation.snapshot()["calm_trend"],
+                    },
+                )
+            except Exception as exc:
+                logger.warning(
+                    "CALM database snapshot failed for simulation {} role={} ({})",
+                    simulation.id,
+                    role,
+                    type(exc).__name__,
+                )
+            try:
+                from api.services.workflow_run_artifacts import (
+                    persist_calm_score_snapshot,
+                )
+
+                await persist_calm_score_snapshot(
+                    agent.workflow_run_id,
+                    role_turns,
+                    role=role,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "CALM object snapshot failed for simulation {} role={} ({})",
+                    simulation.id,
+                    role,
+                    type(exc).__name__,
+                )
 
     async def _run_agent(
         self,
@@ -1001,7 +1086,7 @@ class SimulationManager:
                     recording_url=primary_artifacts.get("recording_url"),
                     transcript_url=primary_artifacts.get("transcript_url"),
                     recording_file_reference=artifact_references,
-                    calm_turns=simulation.calm_runtime.turns,
+                    calm_turns=simulation.calm_score_turns,
                     timings={
                         "duration_ms": (
                             simulation.ended_at - simulation.started_at
