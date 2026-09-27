@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 from api.routes.sakinah import _wait_for_workflow_artifacts
+from api.db.sakinah_persistence_client import _structured_call_scores
 from api.services.sakinah.simulation import SAKINAH_ROLE
 
 
@@ -173,3 +174,35 @@ async def test_end_session_artifact_lookup_waits_for_pipeline_upload():
         "transcript_url": None,
     }
     assert delayed_lookup.await_count == 2
+
+
+def test_structured_call_scores_keep_speakers_in_separate_native_runs():
+    calm_turns = [
+        {
+            "turn_id": "sakinah-turn",
+            "role": "sakinah",
+            "calm_scores": {"response_quality.empathy": 8},
+            "calm_confidence": {"response_quality.empathy": 7},
+        },
+        {
+            "turn_id": "caller-turn",
+            "role": "service_user",
+            "calm_scores": {"anxiety": 6},
+            "calm_confidence": {"anxiety": 8},
+        },
+    ]
+
+    sakinah, _, _ = _structured_call_scores(calm_turns, role="sakinah")
+    caller, _, _ = _structured_call_scores(calm_turns, role="service_user")
+
+    assert sakinah["turns"] == [
+        {
+            "turn_id": "sakinah-turn",
+            "role": "sakinah",
+            "scores": {"response_quality.empathy": 8},
+            "confidence": {"response_quality.empathy": 7},
+            "trend": {},
+            "significant_changes": {},
+        }
+    ]
+    assert caller["turns"][0]["turn_id"] == "caller-turn"

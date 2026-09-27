@@ -37,6 +37,9 @@ SCENARIO_FIELDS = (
     "freestyle_prompt",
 )
 
+SAKINAH_ROLE = "sakinah"
+SERVICE_USER_ROLE = "service_user"
+
 
 def _structured_call_scores(
     calm_turns: list[dict[str, Any]] | None,
@@ -167,23 +170,16 @@ class SakinahPersistenceClient(BaseDBClient):
                 return None
             item.calm_turns = calm_turns
             item.preview_data = {**(item.preview_data or {}), **preview_data}
-            calm_score, safety_score, clinical_evaluation = _structured_call_scores(calm_turns)
-            call_score = (
-                await session.execute(
-                    select(CallScoreModel).where(CallScoreModel.agent_run_id == item.run_id)
-                )
-            ).scalars().first()
-            if call_score is None:
-                session.add(CallScoreModel(
-                    agent_run_id=item.run_id,
-                    calm_score=calm_score,
-                    safety_score=safety_score,
-                    clinical_evaluation=clinical_evaluation,
-                ))
-            else:
-                call_score.calm_score = calm_score
-                call_score.safety_score = safety_score
-                call_score.clinical_evaluation = clinical_evaluation
+            # Keep each speaker's timeline queryable on its native workflow
+            # run. Do not merge both roles into the Sakinah row: callers and
+            # responses have different score dimensions and run details are
+            # authorized independently.
+            await _upsert_role_call_scores(
+                session, item.run_id, calm_turns, SAKINAH_ROLE
+            )
+            await _upsert_role_call_scores(
+                session, item.service_user_run_id, calm_turns, SERVICE_USER_ROLE
+            )
             await session.commit()
             await session.refresh(item)
             return item
@@ -390,34 +386,21 @@ class SakinahPersistenceClient(BaseDBClient):
             item.calm_turns = calm_turns or []
             item.timings = timings or {}
 
-            calm_score, safety_score, clinical_evaluation = _structured_call_scores(
-                calm_turns
-            )
             workflow_run = await session.get(WorkflowRunModel, item.run_id)
             if workflow_run is not None:
-                score_result = await session.execute(
-                    select(CallScoreModel).where(
-                        CallScoreModel.agent_run_id == item.run_id
-                    )
-                )
-                call_score = score_result.scalars().first()
-                if call_score is None:
-                    session.add(
-                        CallScoreModel(
-                            agent_run_id=item.run_id,
-                            calm_score=calm_score,
-                            safety_score=safety_score,
-                            clinical_evaluation=clinical_evaluation,
-                        )
-                    )
-                else:
-                    call_score.calm_score = calm_score
-                    call_score.safety_score = safety_score
-                    call_score.clinical_evaluation = clinical_evaluation
                 workflow_run.latency_metrics = {
                     **(workflow_run.latency_metrics or {}),
                     "simulation": timings or {},
                 }
+            await _upsert_role_call_scores(
+                session, item.run_id, calm_turns or [], SAKINAH_ROLE
+            )
+            await _upsert_role_call_scores(
+                session,
+                item.service_user_run_id,
+                calm_turns or [],
+                SERVICE_USER_ROLE,
+            )
             await session.commit()
             await session.refresh(item)
             return item
