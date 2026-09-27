@@ -1,19 +1,23 @@
 import asyncio
 import json
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, sentinel
 
 import pytest
 from pydantic import ValidationError
 
 from api.services.sakinah.calm_evaluation import (
     CalmEvaluator,
+    EVALUATION_MAX_TOKENS,
     ServiceUserAssessment,
     ServiceUserEvaluationResult,
     calculate_service_user_trends,
     calculate_trend,
     parse_sakinah_evaluation,
     parse_service_user_evaluation,
+    run_llm_inference,
 )
+from api.services.sakinah.calm.live_call import LiveCallCalmTracker
 from api.services.sakinah.simulation import Simulation, SimulationManager
 
 
@@ -225,3 +229,87 @@ async def test_calm_evaluator_rejects_malformed_provider_output():
             turns=[{"role": "service_user", "text": "I am struggling."}],
         )
 
+
+async def test_turn_evaluation_reserves_enough_output_for_the_strict_schema():
+    llm = AsyncMock()
+    llm.run_inference.return_value = "{}"
+
+    await run_llm_inference(llm, [{"role": "user", "content": "hello"}], "prompt")
+
+    assert llm.run_inference.await_args.kwargs["max_tokens"] == EVALUATION_MAX_TOKENS
+    assert EVALUATION_MAX_TOKENS >= 8000
+
+
+async def test_evaluation_llm_uses_pinned_run_configuration_without_lazy_loading(
+    monkeypatch,
+):
+    """Regression for the production DetachedInstanceError on every turn."""
+    simulation = Simulation("sim-1", 1, "Scenario", 300)
+    configuration = SimpleNamespace(llm=object())
+    simulation.agents["sakinah"] = SimpleNamespace(
+        resolved_user_config=configuration,
+        initial_context={"mps_correlation_id": "correlation-1"},
+    )
+    factory = Mock(return_value=sentinel.evaluation_llm)
+    monkeypatch.setattr(
+        "api.services.pipecat.service_factory.create_llm_service", factory
+    )
+
+    result = await SimulationManager()._get_evaluation_llm(simulation)
+
+    assert result is sentinel.evaluation_llm
+    factory.assert_called_once_with(
+        configuration,
+        correlation_id="correlation-1",
+        usage_context="calm_evaluation",
+    )
+
+
+async def test_live_call_tracker_persists_each_role_turn_without_text(monkeypatch):
+    """The normal WebRTC/telephony path writes each completed score promptly."""
+    tracker = LiveCallCalmTracker(
+        workflow_run_id=71,
+        organization_id=17,
+        user_config=SimpleNamespace(),
+        correlation_id="correlation-71",
+    )
+    service_user = ServiceUserEvaluationResult(
+        **_service_user_payload(),
+        turn_id="service_user-1",
+        trend={},
+        evaluated_at="2026-09-27T12:00:01+00:00",
+    )
+    from api.services.sakinah.calm_evaluation import SakinahEvaluationResult
+
+    sakinah = SakinahEvaluationResult(
+        **_sakinah_payload(),
+        turn_id="sakinah-1",
+        evaluated_at="2026-09-27T12:00:02+00:00",
+    )
+    tracker._evaluator = AsyncMock()
+    tracker._evaluator.evaluate.side_effect = [service_user, sakinah]
+    database_write = AsyncMock(return_value=True)
+    object_write = AsyncMock(return_value={"status": "success"})
+    monkeypatch.setattr(
+        "api.services.sakinah.calm.live_call.db_client.update_call_calm_score_progress",
+        database_write,
+    )
+    monkeypatch.setattr(
+        "api.services.workflow_run_artifacts.persist_calm_score_snapshot",
+        object_write,
+    )
+
+    await tracker.record_turn("service_user", "private caller utterance")
+    await tracker.record_turn("sakinah", "private Sakinah response")
+    await tracker.flush()
+
+    assert database_write.await_count == 2
+    assert object_write.await_count == 2
+    stored_history = database_write.await_args.kwargs["calm_turns"]
+    assert [turn["role"] for turn in stored_history] == ["service_user", "sakinah"]
+    assert "private caller utterance" not in str(stored_history)
+    assert "private Sakinah response" not in str(stored_history)
+    assert [call.kwargs["role"] for call in object_write.await_args_list] == [
+        "service_user",
+        "sakinah",
+    ]

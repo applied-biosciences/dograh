@@ -5,16 +5,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION_FILE="$ROOT_DIR/VERSION"
 
 usage() {
-  echo "Usage: $0 X.Y.Z" >&2
+  echo "Usage: $0 X.Y.Z[.N]" >&2
   exit 2
 }
 
 [[ $# -eq 1 ]] || usage
 new_version="$1"
-[[ "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage
+[[ "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || usage
 
 current_version="$(tr -d '[:space:]' < "$VERSION_FILE")"
-[[ "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+[[ "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || {
   echo "Current VERSION is invalid: $current_version" >&2
   exit 1
 }
@@ -63,6 +63,18 @@ for filename in ("ui/package.json", "ui/package-lock.json"):
     if count != (2 if filename.endswith("package-lock.json") else 1):
         raise SystemExit(f"Could not update {filename} version")
     path.write_text(text)
+
+chart = root / "deploy/helm/dograh/Chart.yaml"
+chart_text = chart.read_text()
+chart_text, count = re.subn(
+    r'(?m)^appVersion: "[^"]+"$',
+    f'appVersion: "{version}"',
+    chart_text,
+    count=1,
+)
+if count != 1:
+    raise SystemExit("Could not update Helm appVersion")
+chart.write_text(chart_text)
 PY
 
 "$ROOT_DIR/scripts/check_version_sync.sh"

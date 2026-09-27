@@ -14,13 +14,16 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { PostHogEvent } from '@/constants/posthog-events';
-import { downloadFile, getSignedUrl } from '@/lib/files';
 import { getCallReplay } from '@/lib/callHistory';
+import { downloadFile, downloadSignedUrl, downloadTextFile, getSignedUrl } from '@/lib/files';
 
 export function MediaPreviewDialog() {
     const [isOpen, setIsOpen] = useState(false);
     const [audioSignedUrl, setAudioSignedUrl] = useState<string | null>(null);
+    const [audioDownloadUrl, setAudioDownloadUrl] = useState<string | null>(null);
     const [transcriptContent, setTranscriptContent] = useState<string | null>(null);
+    const [transcriptDownloadUrl, setTranscriptDownloadUrl] = useState<string | null>(null);
+    const [unavailableRecordings, setUnavailableRecordings] = useState<string[]>([]);
     const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
     const [recordingKey, setRecordingKey] = useState<string | null>(null);
     const [transcriptKey, setTranscriptKey] = useState<string | null>(null);
@@ -31,8 +34,11 @@ export function MediaPreviewDialog() {
             if (!recordingUrl && !transcriptUrl && !callId) return;
             setMediaLoading(true);
             setAudioSignedUrl(null);
+            setAudioDownloadUrl(null);
             setTranscriptContent(null);
-            setRecordingKey(callId ? null : recordingUrl);
+            setTranscriptDownloadUrl(null);
+            setUnavailableRecordings([]);
+            setRecordingKey(recordingUrl);
             setTranscriptKey(transcriptUrl);
             setSelectedRunId(runId);
             setIsOpen(true);
@@ -40,12 +46,24 @@ export function MediaPreviewDialog() {
             if (callId) {
                 try {
                     const replay = await getCallReplay(callId);
-                    setAudioSignedUrl(replay.recording_signed_url);
-                    setTranscriptContent(replay.transcript);
+                    const fallbackRecording = replay.recordings.find((item) => item.track === 'mixed')
+                        ?? replay.recordings[0];
+                    const transcript = replay.transcript ?? replay.utterances
+                        .map((item) => `${item.speaker}: ${item.transcript}`)
+                        .join('\n');
+                    setAudioSignedUrl(replay.recording_signed_url ?? fallbackRecording?.signed_url ?? null);
+                    setAudioDownloadUrl(replay.recording_download_url ?? fallbackRecording?.download_url ?? null);
+                    // Run Details intentionally does not expose object keys;
+                    // its authorized replay response provides download URLs.
+                    setRecordingKey(recordingUrl);
+                    setTranscriptKey(transcriptUrl);
+                    setTranscriptContent(transcript || null);
+                    setTranscriptDownloadUrl(replay.transcript_download_url ?? null);
+                    setUnavailableRecordings(replay.unavailable_recordings ?? []);
                     posthog.capture(PostHogEvent.TRANSCRIPT_VIEWED, {
                         run_id: runId,
                         source: 'call_replay',
-                        transcript_length: replay.transcript?.length ?? 0,
+                        transcript_length: transcript.length,
                     });
                 } catch (error) {
                     console.error('Error loading call replay:', error);
@@ -56,7 +74,10 @@ export function MediaPreviewDialog() {
             }
 
             const [audioResult, transcriptResult] = await Promise.all([
-                recordingUrl ? getSignedUrl(recordingUrl) : null,
+                // Request an inline, typed response. Historic recordings may
+                // have been stored as application/octet-stream; Safari does
+                // not reliably preview those WAV bytes in an <audio> element.
+                recordingUrl ? getSignedUrl(recordingUrl, true) : null,
                 transcriptUrl ? getSignedUrl(transcriptUrl, true) : null,
             ]);
 
@@ -122,7 +143,13 @@ export function MediaPreviewDialog() {
                         </pre>
                     )}
 
-                    {!mediaLoading && !audioSignedUrl && !transcriptContent && (
+                    {!mediaLoading && unavailableRecordings.length > 0 && (
+                        <p className="mt-4 text-sm text-muted-foreground">
+                            Recording unavailable. This does not prevent SQL-backed run details from being viewed.
+                        </p>
+                    )}
+
+                    {!mediaLoading && !audioSignedUrl && !transcriptContent && unavailableRecordings.length === 0 && (
                         <div className="flex items-center justify-center py-8 text-muted-foreground">
                             No recording or transcript available.
                         </div>
@@ -133,13 +160,17 @@ export function MediaPreviewDialog() {
                             <Button variant="secondary">Close</Button>
                         </DialogClose>
                         <div className="flex gap-2">
-                            {recordingKey && (
-                                <Button variant="outline" onClick={() => downloadFile(recordingKey)}>
+                            {(audioDownloadUrl || recordingKey) && (
+                                <Button variant="outline" onClick={() => audioDownloadUrl ? downloadSignedUrl(audioDownloadUrl) : downloadFile(recordingKey)}>
                                     Download Recording
                                 </Button>
                             )}
-                            {transcriptKey && (
-                                <Button variant="outline" onClick={() => downloadFile(transcriptKey)}>
+                            {(transcriptDownloadUrl || transcriptContent || transcriptKey) && (
+                                <Button variant="outline" onClick={() => transcriptDownloadUrl
+                                    ? downloadSignedUrl(transcriptDownloadUrl)
+                                    : transcriptContent
+                                        ? downloadTextFile(transcriptContent, `run-${selectedRunId ?? 'transcript'}-transcript.txt`)
+                                        : downloadFile(transcriptKey)}>
                                     Download Transcript
                                 </Button>
                             )}

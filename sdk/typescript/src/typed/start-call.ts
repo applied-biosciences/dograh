@@ -5,7 +5,7 @@
 // from `/api/v1/node-types`.
 
 /**
- * Each entry declares one variable to capture, with its name, data type, and extraction hint.
+ * Each entry declares one variable to capture, with its name, data type, and extraction hint. Call outcomes are configured separately in workflow settings.
  */
 export interface StartCallExtraction_variablesRow {
     /**
@@ -60,11 +60,11 @@ export interface StartCall {
      */
     add_global_prompt?: boolean;
     /**
-     * When true, the agent waits before speaking after pickup. Useful for outbound calls where the called party needs a moment to settle.
+     * Set the initial listening window for outbound voicemail and screening handling. A brief human greeting can end the wait sooner.
      */
     delayed_start?: boolean;
     /**
-     * Seconds to wait before the agent speaks. 0.1–10.
+     * Seconds to listen for a silent answer before opening. 0.1–10. Replaces the default 1.2-second listening window.
      */
     delayed_start_duration?: number;
     /**
@@ -76,7 +76,7 @@ export interface StartCall {
      */
     extraction_prompt?: string;
     /**
-     * Each entry declares one variable to capture, with its name, data type, and extraction hint.
+     * Each entry declares one variable to capture, with its name, data type, and extraction hint. Call outcomes are configured separately in workflow settings.
      */
     extraction_variables?: Array<StartCallExtraction_variablesRow>;
     /**

@@ -50,6 +50,7 @@ from api.services.mps_service_key_client import mps_service_key_client
 from api.services.posthog_client import capture_event
 from api.services.reports import generate_workflow_report_csv
 from api.services.storage import storage_fs
+from api.services.storage_audit import audit_run_storage
 from api.services.workflow.configuration_policy import (
     ExternalPBXConfigurationDisabledError,
     WorkflowConfigurationNotFoundError,
@@ -1430,6 +1431,7 @@ async def create_workflow_run(
         call_type=call_type,
         organization_id=user.selected_organization_id,
         definition_id=run_inputs.definition_id,
+        use_draft=run_inputs.use_draft,
         initial_context=initial_context,
     )
     return {
@@ -1452,8 +1454,22 @@ async def get_workflow_run(
     run = await db_client.get_workflow_run(
         run_id, organization_id=user.selected_organization_id
     )
-    if not run:
+    if not run or run.workflow_id != workflow_id:
         raise HTTPException(status_code=404, detail="Workflow run not found")
+
+    # Older and partially migrated runs may have recording metadata rows even
+    # when denormalized URL fields are empty. Prefer canonical object keys so
+    # their persisted artifacts remain available from this page.
+    recording_rows = await db_client.get_call_recordings_for_run(run.id)
+    mixed_recording = next(
+        (item for item in recording_rows if item.track == "mixed"), None
+    )
+    recording_url = (
+        run.recording_object_key
+        or run.recording_url
+        or (mixed_recording.object_key if mixed_recording else None)
+    )
+    transcript_url = run.transcript_object_key or run.transcript_url
 
     public_access_token = run.public_access_token
     user_recording_url = get_recording_storage_key(run.extra, "user")
@@ -1461,12 +1477,17 @@ async def get_workflow_run(
     has_user_recording = has_recording_track(run.extra, "user")
     has_bot_recording = has_recording_track(run.extra, "bot")
     if (
-        run.transcript_url
-        or run.recording_url
+        transcript_url
+        or recording_url
         or has_user_recording
         or has_bot_recording
     ) and not public_access_token:
         public_access_token = await db_client.ensure_public_access_token(run.id)
+
+    calm_score_timeline = await db_client.get_calm_score_timeline(
+        workflow_run_id=run.id,
+        organization_id=user.selected_organization_id,
+    )
 
     return {
         "id": run.id,
@@ -1474,8 +1495,8 @@ async def get_workflow_run(
         "name": run.name,
         "mode": run.mode,
         "is_completed": run.is_completed,
-        "transcript_url": run.transcript_url,
-        "recording_url": run.recording_url,
+        "transcript_url": transcript_url,
+        "recording_url": recording_url,
         "user_recording_url": user_recording_url,
         "bot_recording_url": bot_recording_url,
         "transcript_public_url": artifact_url(public_access_token, "transcript"),
@@ -1522,8 +1543,36 @@ async def get_workflow_run(
         "recording_format": run.recording_format,
         "recording_size_bytes": run.recording_size_bytes,
         "full_transcript": run.full_transcript,
+        "transcript_object_key": run.transcript_object_key,
+        "latency_metrics": run.latency_metrics,
         "termination_reason": run.termination_reason,
+        "calm_score_timeline": calm_score_timeline,
     }
+
+
+@router.get(
+    "/{workflow_id}/runs/{run_id}/storage-audit",
+    **sdk_expose(
+        method="audit_workflow_run_storage",
+        description="Verify relational and object-storage artifacts for one run.",
+    ),
+)
+async def audit_workflow_run_storage(
+    workflow_id: int,
+    run_id: int,
+    user: UserModel = Depends(get_user),
+) -> dict:
+    """Return read-only storage verification scoped to the user's org."""
+    run = await db_client.get_workflow_run(
+        run_id,
+        organization_id=user.selected_organization_id,
+    )
+    if run is None or run.workflow_id != workflow_id:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    return await audit_run_storage(
+        run_id,
+        organization_id=user.selected_organization_id,
+    )
 
 
 class WorkflowRunsResponse(BaseModel):

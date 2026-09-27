@@ -22,6 +22,7 @@ import { toast } from 'sonner';
 
 import WorkflowLayout from '@/app/workflow/WorkflowLayout';
 import {
+    auditWorkflowRunStorageApiV1WorkflowWorkflowIdRunsRunIdStorageAuditGet,
     getWorkflowApiV1WorkflowFetchWorkflowIdGet,
     getWorkflowRunApiV1WorkflowWorkflowIdRunsRunIdGet,
 } from '@/client/sdk.gen';
@@ -37,10 +38,36 @@ import { useOrganizationTimezone } from '@/hooks/useOrganizationTimezone';
 import { useAuth } from '@/lib/auth';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { formatDateTime } from '@/lib/dateTime';
-import { downloadFile, getSignedUrl } from '@/lib/files';
+import { downloadFile, downloadTextFile, getSignedUrl } from '@/lib/files';
 import { cn } from '@/lib/utils';
 
+import { CalmScoreTimelineSection, type CalmScoreTimeline } from './components/CalmScoreTimeline';
+
+type StorageStatus = 'verified' | 'missing' | 'pending' | 'not_expected' | 'not_configured' | 'unknown';
+
+interface StorageAudit {
+    postgres?: {
+        status?: StorageStatus;
+        transcript_status?: StorageStatus;
+        recording_metadata_count?: number;
+    };
+    minio?: {
+        status?: StorageStatus;
+        configured?: boolean;
+        objects_found?: number;
+        objects?: Array<{
+            type?: string;
+            key?: string;
+            status?: StorageStatus;
+            size_bytes?: number;
+            checksum_sha256?: string | null;
+        }>;
+    };
+    aws?: { status?: StorageStatus };
+}
+
 interface WorkflowRunResponse {
+    call_id: string | null;
     mode: string;
     created_at: string | null;
     is_completed: boolean;
@@ -48,6 +75,7 @@ interface WorkflowRunResponse {
     recording_url: string | null;
     user_recording_url: string | null;
     bot_recording_url: string | null;
+    full_transcript: string | null;
     cost_info: {
         dograh_token_usage?: number | null;
         call_duration_seconds?: number | null;
@@ -56,6 +84,7 @@ interface WorkflowRunResponse {
     gathered_context: Record<string, string | number | boolean | object> | null;
     logs: WorkflowRunLogs | null;
     annotations: Record<string, unknown> | null;
+    calm_score_timeline: CalmScoreTimeline | null;
 }
 
 const RUN_SHELL_HEIGHT_CLASS = "h-[calc(100svh-49px)] min-h-[calc(100svh-49px)] max-h-[calc(100svh-49px)]";
@@ -93,6 +122,58 @@ function MetricCard({ label, value }: { label: string; value: string }) {
             <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">{label}</p>
             <p className="mt-2 text-lg font-semibold text-foreground">{value}</p>
         </div>
+    );
+}
+
+function StorageAuditSection({ audit }: { audit: StorageAudit }) {
+    const statusLabel = (status?: StorageStatus) => status?.replaceAll('_', ' ') ?? 'unknown';
+    const statusIcon = (status?: StorageStatus) => status === 'verified' ? '✓' : status === 'not_configured' || status === 'not_expected' ? '–' : '!';
+    const objectCount = audit.minio?.objects_found ?? 0;
+
+    return (
+        <Card className="border-border">
+            <CardHeader>
+                <CardTitle className="text-lg">Storage</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+                <div className="grid gap-2 sm:grid-cols-3">
+                    <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+                        <p className="text-muted-foreground">Database</p>
+                        <p className="font-medium">Local Postgres {statusIcon(audit.postgres?.status)} <span className="text-muted-foreground">({statusLabel(audit.postgres?.status)})</span></p>
+                    </div>
+                    <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+                        <p className="text-muted-foreground">Transcript</p>
+                        <p className="font-medium">Postgres {statusIcon(audit.postgres?.transcript_status)} <span className="text-muted-foreground">({statusLabel(audit.postgres?.transcript_status)})</span></p>
+                    </div>
+                    <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+                        <p className="text-muted-foreground">AWS S3</p>
+                        <p className="font-medium">{statusLabel(audit.aws?.status)} {statusIcon(audit.aws?.status)}</p>
+                    </div>
+                </div>
+                <div className="flex flex-wrap gap-x-5 gap-y-1 text-muted-foreground">
+                    <span>Local MinIO: {statusLabel(audit.minio?.status)}</span>
+                    <span>Audio objects: {objectCount}</span>
+                    <span>Recording metadata: {audit.postgres?.recording_metadata_count ?? 0}</span>
+                </div>
+                {audit.minio?.objects && audit.minio.objects.length > 0 && (
+                    <div className="space-y-1 border-t border-border pt-3">
+                        {audit.minio.objects.map((object) => (
+                            <div key={`${object.type}-${object.key}`} className="flex flex-wrap items-center gap-2 text-xs">
+                                <span className="font-medium">{object.type ?? 'object'}</span>
+                                <span className="min-w-0 truncate font-mono text-muted-foreground">{object.key}</span>
+                                <span>{object.size_bytes ?? 0} bytes</span>
+                                <span>{statusIcon(object.status)} {statusLabel(object.status)}</span>
+                                {object.checksum_sha256 && (
+                                    <span className="font-mono text-muted-foreground" title={object.checksum_sha256}>
+                                        sha256:{object.checksum_sha256.slice(0, 12)}…
+                                    </span>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </CardContent>
+        </Card>
     );
 }
 
@@ -536,16 +617,27 @@ function SplitTracksSection({
     );
 }
 
+interface AvatarRunSummary {
+    mode?: string;
+    avatar_id?: string;
+    duration_seconds?: number;
+    first_frame_latency_ms?: number | null;
+    failed?: boolean;
+}
+
 function RunMetricsSection({
     costInfo,
     logs,
     gatheredContext,
+    annotations,
 }: {
     costInfo: WorkflowRunResponse['cost_info'];
     logs: WorkflowRunLogs | null;
     gatheredContext: Record<string, string | number | boolean | object> | null;
+    annotations: Record<string, unknown> | null;
 }) {
     const metrics = getTranscriptMetrics(logs, gatheredContext);
+    const avatar = (annotations?.avatar ?? null) as AvatarRunSummary | null;
 
     return (
         <Card className="border-border">
@@ -558,6 +650,16 @@ function RunMetricsSection({
                 <MetricCard label="Bot Turns" value={String(metrics.botTurns)} />
                 <MetricCard label="Tool Calls" value={String(metrics.toolCalls)} />
                 <MetricCard label="Nodes Visited" value={String(metrics.visitedNodes)} />
+                {avatar && (
+                    <MetricCard
+                        label="Avatar"
+                        value={
+                            avatar.failed
+                                ? 'Fell back to audio'
+                                : `${formatDuration(avatar.duration_seconds)}${avatar.first_frame_latency_ms != null ? ` · ${avatar.first_frame_latency_ms}ms to first frame` : ''}`
+                        }
+                    />
+                )}
             </CardContent>
         </Card>
     );
@@ -615,6 +717,7 @@ export default function WorkflowRunPage() {
     const auth = useAuth();
     const organizationTimezone = useOrganizationTimezone();
     const [workflowRun, setWorkflowRun] = useState<WorkflowRunResponse | null>(null);
+    const [storageAudit, setStorageAudit] = useState<StorageAudit | null>(null);
     const [workflowName, setWorkflowName] = useState<string | null>(null);
     const customizeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -637,7 +740,7 @@ export default function WorkflowRunPage() {
             const runId = Number(params.runId);
 
             try {
-                const [runResponse, workflowResponse] = await Promise.all([
+                const [runResponse, workflowResponse, auditResponse] = await Promise.all([
                     getWorkflowRunApiV1WorkflowWorkflowIdRunsRunIdGet({
                         path: {
                             workflow_id: workflowId,
@@ -649,10 +752,20 @@ export default function WorkflowRunPage() {
                             workflow_id: workflowId,
                         },
                     }),
+                    auditWorkflowRunStorageApiV1WorkflowWorkflowIdRunsRunIdStorageAuditGet({
+                        path: {
+                            workflow_id: workflowId,
+                            run_id: runId,
+                        },
+                    }),
                 ]);
 
+                setStorageAudit((auditResponse.data as StorageAudit | undefined) ?? null);
+
                 setWorkflowName(workflowResponse.data?.name ?? null);
+                const responseData = runResponse.data as (typeof runResponse.data & { calm_score_timeline?: CalmScoreTimeline }) | undefined;
                 const runData = {
+                    call_id: runResponse.data?.call_id ?? null,
                     mode: runResponse.data?.mode ?? '',
                     created_at: runResponse.data?.created_at ?? null,
                     is_completed: runResponse.data?.is_completed ?? false,
@@ -660,11 +773,13 @@ export default function WorkflowRunPage() {
                     recording_url: runResponse.data?.recording_url ?? null,
                     user_recording_url: runResponse.data?.user_recording_url ?? null,
                     bot_recording_url: runResponse.data?.bot_recording_url ?? null,
+                    full_transcript: runResponse.data?.full_transcript ?? null,
                     cost_info: runResponse.data?.cost_info ?? null,
                     initial_context: runResponse.data?.initial_context as Record<string, string> | null ?? null,
                     gathered_context: runResponse.data?.gathered_context as Record<string, string> | null ?? null,
                     logs: runResponse.data?.logs as WorkflowRunLogs | null ?? null,
                     annotations: runResponse.data?.annotations as Record<string, unknown> | null ?? null,
+                    calm_score_timeline: responseData?.calm_score_timeline ?? null,
                 };
                 setWorkflowRun(runData);
                 posthog.capture(PostHogEvent.WORKFLOW_RUN_DETAILS_VIEWED, {
@@ -683,9 +798,33 @@ export default function WorkflowRunPage() {
         fetchWorkflowRun();
     }, [params.workflowId, params.runId, auth]);
 
+    // Phone callers have no signaling WebSocket into Run Details. Refresh the
+    // same authorized score-only timeline while an inbound call remains live.
+    useEffect(() => {
+        if (!auth.isAuthenticated || auth.loading || !workflowRun || workflowRun.is_completed) return;
+        const workflowId = Number(params.workflowId);
+        const runId = Number(params.runId);
+        let cancelled = false;
+        const refreshLiveRun = async () => {
+            const response = await getWorkflowRunApiV1WorkflowWorkflowIdRunsRunIdGet({ path: { workflow_id: workflowId, run_id: runId } });
+            if (cancelled || response.error || !response.data) return;
+            const data = response.data as typeof response.data & { calm_score_timeline?: CalmScoreTimeline };
+            setWorkflowRun((current) => current ? {
+                ...current,
+                is_completed: data.is_completed ?? current.is_completed,
+                calm_score_timeline: data.calm_score_timeline ?? null,
+            } : current);
+        };
+        const interval = window.setInterval(() => void refreshLiveRun(), 2000);
+        return () => {
+            cancelled = true;
+            window.clearInterval(interval);
+        };
+    }, [auth.isAuthenticated, auth.loading, params.workflowId, params.runId, workflowRun?.is_completed]);
+
     let returnValue = null;
     const isTextChatRun = workflowRun?.mode === WORKFLOW_RUN_MODES.TEXTCHAT;
-    const showRunDetailsView = Boolean(workflowRun?.is_completed || isTextChatRun);
+    const showRunDetailsView = Boolean(workflowRun);
     const userSplitRecordingUrl = workflowRun?.user_recording_url ?? null;
     const botSplitRecordingUrl = workflowRun?.bot_recording_url ?? null;
     const hasSplitTracks = Boolean(userSplitRecordingUrl && botSplitRecordingUrl);
@@ -743,7 +882,7 @@ export default function WorkflowRunPage() {
                                 </div>
                                 <div className="flex min-w-0 items-center gap-4 pt-1">
                                     <CardTitle className="min-w-0 text-2xl">
-                                        {isTextChatRun ? 'Text Chat Session' : 'Agent Run Completed'}
+                                        {isTextChatRun ? 'Text Chat Session' : workflowRun?.is_completed ? 'Agent Run Completed' : 'Agent Run In Progress'}
                                     </CardTitle>
                                     <div className={`h-8 w-8 rounded-full flex items-center justify-center ${isTextChatRun ? 'bg-sky-500/15' : 'bg-emerald-500/20'}`}>
                                         {isTextChatRun ? (
@@ -780,7 +919,9 @@ export default function WorkflowRunPage() {
                             <p className="text-muted-foreground mb-8">
                                 {isTextChatRun
                                     ? 'Review the conversation history, metrics, and context captured for this text session.'
-                                    : 'Your voice agent run has been completed successfully. You can preview or download the transcript and recording.'}
+                                    : workflowRun?.is_completed
+                                        ? 'Your voice agent run has been completed successfully. You can preview or download the transcript and recording.'
+                                        : 'This incoming call is active. CALM scores refresh as completed turns are evaluated.'}
                             </p>
 
                             <div className="flex flex-wrap gap-4">
@@ -792,14 +933,26 @@ export default function WorkflowRunPage() {
                                                 recordingUrl={workflowRun?.recording_url}
                                                 transcriptUrl={workflowRun?.transcript_url}
                                                 runId={Number(params.runId)}
+                                                callId={workflowRun?.call_id}
                                                 onOpenPreview={openPreview}
                                             />
                                         </div>
                                         <div className="flex items-center gap-2 border-l border-border pl-4">
                                             <span className="text-sm text-muted-foreground">Download:</span>
                                             <Button
-                                                onClick={() => downloadFile(workflowRun?.transcript_url ?? null)}
-                                                disabled={!workflowRun?.transcript_url || !auth.isAuthenticated}
+                                                onClick={() => {
+                                                    if (workflowRun?.transcript_url) {
+                                                        void downloadFile(workflowRun.transcript_url);
+                                                        return;
+                                                    }
+                                                    if (workflowRun?.full_transcript) {
+                                                        downloadTextFile(
+                                                            workflowRun.full_transcript,
+                                                            `run-${params.runId}-transcript.txt`,
+                                                        );
+                                                    }
+                                                }}
+                                                disabled={!(workflowRun?.transcript_url || workflowRun?.full_transcript) || !auth.isAuthenticated}
                                                 size="sm"
                                                 className="gap-2"
                                             >
@@ -846,7 +999,10 @@ export default function WorkflowRunPage() {
                             costInfo={workflowRun?.cost_info ?? null}
                             logs={workflowRun?.logs ?? null}
                             gatheredContext={workflowRun?.gathered_context ?? null}
+                            annotations={workflowRun?.annotations ?? null}
                         />
+
+                        {storageAudit && <StorageAuditSection audit={storageAudit} />}
 
                         {!isTextChatRun && hasSplitTracks && (
                             <SplitTracksSection
@@ -870,6 +1026,13 @@ export default function WorkflowRunPage() {
                             <ContextDisplay
                                 title="QA Results"
                                 context={workflowRun.annotations as Record<string, string | number | boolean | object>}
+                            />
+                        )}
+
+                        {!isTextChatRun && (workflowRun?.calm_score_timeline || !workflowRun?.is_completed) && (
+                            <CalmScoreTimelineSection
+                                timeline={workflowRun?.calm_score_timeline ?? { session_id: runId, status: 'running', roles: [] }}
+                                emptyMessage="Waiting for the first completed score turn. This view refreshes while the call is active."
                             />
                         )}
                     </div>

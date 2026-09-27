@@ -21,7 +21,7 @@ node changes.
 """
 
 import json
-from typing import TYPE_CHECKING, Awaitable, Callable, Optional, Set
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from loguru import logger
 
@@ -102,11 +102,7 @@ class RealtimeFeedbackObserver(BaseObserver):
         super().__init__()
         self._ws_sender = ws_sender
         self._logs_buffer = logs_buffer
-        self._frames_seen: Set[str] = set()
-
-    async def cleanup(self):
-        """Clean up resources. Must be called when the observer is no longer needed."""
-        pass
+        self._frames_seen: set[int] = set()
 
     async def on_push_frame(self, data: FramePushed):
         """Process frames and send relevant ones to the client."""
@@ -243,6 +239,11 @@ class RealtimeFeedbackObserver(BaseObserver):
         # Handle pipeline errors
         elif isinstance(frame, ErrorFrame):
             processor_name = str(frame.processor) if frame.processor else None
+            is_permanent = bool(
+                frame.processor is not None
+                and not getattr(frame.processor, "is_usable", True)
+            )
+            fatal = frame.fatal or is_permanent
             extra_payload: dict[str, object] = {}
             # Surface structured fields when the underlying exception carries
             # them (e.g. google.genai APIError: code=1008, status=None,
@@ -265,7 +266,7 @@ class RealtimeFeedbackObserver(BaseObserver):
                 )
             log_failure(
                 failure,
-                fatal=frame.fatal,
+                fatal=fatal,
             )
 
             if exc is not None:
@@ -286,7 +287,7 @@ class RealtimeFeedbackObserver(BaseObserver):
             await self._send_message(
                 build_pipeline_error_event(
                     error=frame.error,
-                    fatal=frame.fatal,
+                    fatal=fatal,
                     processor=processor_name,
                     extra_payload=extra_payload or None,
                 )
@@ -326,6 +327,9 @@ def register_turn_log_handlers(
     transcript_coordinator: "TranscriptLogCoordinator",
     user_aggregator,
     assistant_aggregator,
+    *,
+    on_user_turn: Callable[[object], Awaitable[None] | None] | None = None,
+    on_assistant_turn: Callable[[object], Awaitable[None] | None] | None = None,
 ):
     """Register event handlers on aggregators to persist final turn transcripts.
 
@@ -344,6 +348,13 @@ def register_turn_log_handlers(
             )
         except Exception as e:
             logger.error(f"Failed to coordinate user turn transcript: {e}")
+        if on_user_turn is not None:
+            try:
+                callback_result = on_user_turn(message)
+                if callback_result is not None:
+                    await callback_result
+            except Exception as e:
+                logger.warning(f"Failed to queue user turn CALM scoring: {e}")
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
     async def on_assistant_turn_stopped(aggregator, message):
@@ -356,3 +367,10 @@ def register_turn_log_handlers(
                 )
             except Exception as e:
                 logger.error(f"Failed to coordinate assistant turn transcript: {e}")
+            if on_assistant_turn is not None:
+                try:
+                    callback_result = on_assistant_turn(message)
+                    if callback_result is not None:
+                        await callback_result
+                except Exception as e:
+                    logger.warning(f"Failed to queue assistant turn CALM scoring: {e}")

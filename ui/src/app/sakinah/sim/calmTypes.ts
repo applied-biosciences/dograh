@@ -3,7 +3,6 @@ export interface InferredParameter {
     confidence: number;
     evidence: string;
 }
-
 export type ParameterGroup = Record<string, InferredParameter>;
 export type Trend =
     | "rapidly_improving"
@@ -67,4 +66,3 @@ export interface TurnEvaluation {
     result?: CalmEvaluationResult;
     error?: string;
 }
-

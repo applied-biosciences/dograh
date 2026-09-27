@@ -1,6 +1,6 @@
 "use client";
 
-import { Calculator, Cog, Globe, type LucideIcon, PhoneForwarded, PhoneOff, Puzzle } from "lucide-react";
+import { ArrowLeftRight, Calculator, Cog, Globe, type LucideIcon, PhoneForwarded, PhoneOff, Puzzle } from "lucide-react";
 import { type ReactNode } from "react";
 
 import type {
@@ -12,14 +12,14 @@ import type {
     EndCallToolDefinition,
     HttpApiToolDefinition,
     McpToolDefinition,
-    PresetToolParameter,
-    ToolParameter,
+    TransferAgentConfig,
+    TransferAgentToolDefinition,
     TransferCallConfig,
     TransferCallToolDefinition,
 } from "@/client/types.gen";
 import { createUuid } from "@/lib/uuid";
 
-export type ToolCategory = "http_api" | "end_call" | "transfer_call" | "calculator" | "native" | "integration" | "mcp";
+export type ToolCategory = "http_api" | "end_call" | "transfer_call" | "transfer_agent" | "calculator" | "native" | "integration" | "mcp";
 
 export type EndCallMessageType = "none" | "custom" | "audio";
 export type TransferDestinationSource = "static" | "dynamic" | "context_mapping";
@@ -79,23 +79,6 @@ export function ruleRowsToContextMappingRules(
     }));
 }
 
-export interface TransferResolverConfig {
-    type: "http";
-    url: string;
-    headers?: Record<string, string> | null;
-    credential_uuid?: string | null;
-    timeout_ms: number;
-    wait_message?: string | null;
-    parameters?: ToolParameter[] | null;
-    preset_parameters?: PresetToolParameter[] | null;
-}
-
-export interface ExtendedTransferCallConfig extends Omit<TransferCallConfig, "context_mapping"> {
-    destination_source?: TransferDestinationSource;
-    resolver?: TransferResolverConfig | null;
-    context_mapping?: ContextDestinationMappingConfig | null;
-}
-
 export interface ToolCategoryConfig {
     value: ToolCategory;
     label: string;
@@ -141,6 +124,18 @@ export const TOOL_CATEGORIES: ToolCategoryConfig[] = [
         autoFill: {
             name: "Transfer Call",
             description: "Transfer the caller to another phone number when requested",
+        },
+    },
+    {
+        value: "transfer_agent",
+        label: "Transfer To Agent",
+        description: "Hand the live call to another Dograh agent, without dropping the caller",
+        icon: ArrowLeftRight,
+        iconName: "arrow-left-right",
+        iconColor: "#0EA5E9",
+        autoFill: {
+            name: "Transfer To Agent",
+            description: "Transfer the caller to a specialist agent when their question is outside what you handle",
         },
     },
     {
@@ -208,6 +203,8 @@ export function getToolTypeLabel(category: string): string {
             return "End Call Tool";
         case "transfer_call":
             return "Transfer Call Tool";
+        case "transfer_agent":
+            return "Transfer To Agent Tool";
         case "http_api":
             return "HTTP API Tool";
         case "calculator":
@@ -232,6 +229,9 @@ export const DEFAULT_END_CALL_CONFIG: EndCallConfig = {
     endCallReason: false,
 };
 
+export const DEFAULT_TRANSFER_AGENT_MESSAGE =
+    "Let me connect you with the right person. One moment please.";
+
 export const DEFAULT_TRANSFER_CALL_CONFIG: TransferCallConfig = {
     destination: "",
     messageType: "none",
@@ -243,6 +243,7 @@ export type ToolDefinition =
     | HttpApiToolDefinition
     | EndCallToolDefinition
     | TransferCallToolDefinition
+    | TransferAgentToolDefinition
     | CalculatorToolDefinition
     | McpToolDefinition;
 
@@ -258,6 +259,21 @@ export function createTransferCallDefinition(config: TransferCallConfig): Transf
     return {
         schema_version: 1,
         type: "transfer_call",
+        config,
+    };
+}
+
+/**
+ * A transfer tool is defined by where it sends the caller, so there is no
+ * meaningful empty default — the create dialog collects the destination and
+ * builds the definition from it.
+ */
+export function createTransferAgentDefinition(
+    config: TransferAgentConfig,
+): TransferAgentToolDefinition {
+    return {
+        schema_version: 1,
+        type: "transfer_agent",
         config,
     };
 }

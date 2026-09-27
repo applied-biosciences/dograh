@@ -8,9 +8,11 @@ ui_version="$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' "$ROOT_DIR/ui/package.
 lock_version="$(sed -n '3s/^  "version": "\([^"]*\)",$/\1/p' "$ROOT_DIR/ui/package-lock.json")"
 lock_package_version="$(sed -n '9s/^      "version": "\([^"]*\)",$/\1/p' "$ROOT_DIR/ui/package-lock.json")"
 
-for value in "$version" "$api_version" "$ui_version" "$lock_version" "$lock_package_version"; do
+helm_app_version="$(awk -F'"' '/^appVersion: / {print $2; exit}' "$ROOT_DIR/deploy/helm/dograh/Chart.yaml")"
+
+for value in "$version" "$api_version" "$ui_version" "$lock_version" "$lock_package_version" "$helm_app_version"; do
   [[ "$value" == "$version" ]] || {
-    echo "Version mismatch: VERSION=$version api=$api_version ui=$ui_version lock=$lock_version lock-package=$lock_package_version" >&2
+    echo "Version mismatch: VERSION=$version api=$api_version ui=$ui_version lock=$lock_version lock-package=$lock_package_version helm=$helm_app_version" >&2
     exit 1
   }
 done

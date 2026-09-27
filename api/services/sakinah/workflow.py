@@ -1,7 +1,18 @@
+from datetime import UTC, datetime
+
 from api.db.models import UserModel
 
 WORKFLOW_NAME = "Sakinah Scenario Console"
 SERVICE_USER_WORKFLOW_NAME = "Sakinah Service User Simulator"
+
+
+def is_sakinah_workflow(workflow) -> bool:
+    """Whether the run is the Sakinah supporter agent, not its simulator peer."""
+    if getattr(workflow, "name", None) == WORKFLOW_NAME:
+        return True
+    configurations = getattr(workflow, "workflow_configurations", None) or {}
+    calm = configurations.get("calm_scoring") if isinstance(configurations, dict) else None
+    return isinstance(calm, dict) and calm.get("enabled") is True
 
 # Superseded seed prompts, kept verbatim so ensure_* can recognize and
 # upgrade a stale seed without touching user-customized workflows. Append
@@ -197,24 +208,91 @@ async def _ensure_seeded_workflow(
     workflows = await db_client.get_all_workflows(
         organization_id=user.selected_organization_id
     )
-    existing = next(
-        (workflow for workflow in workflows if workflow.name == name), None
-    )
-    if not existing:
-        existing = await db_client.create_workflow(
+    matching = [workflow for workflow in workflows if workflow.name == name]
+
+    def has_tts_voice_override(configurations: dict | None) -> bool:
+        if not isinstance(configurations, dict):
+            return False
+        legacy_overrides = configurations.get("model_overrides")
+        legacy_tts = (
+            legacy_overrides.get("tts")
+            if isinstance(legacy_overrides, dict)
+            else None
+        )
+        if isinstance(legacy_tts, dict) and legacy_tts.get("voice"):
+            return True
+        override = configurations.get("model_configuration_v2_override")
+        if not isinstance(override, dict):
+            return False
+        if override.get("mode") == "dograh":
+            return bool((override.get("dograh") or {}).get("voice"))
+        byok = override.get("byok")
+        pipeline = (
+            byok.get("pipeline") or {} if isinstance(byok, dict) else {}
+        )
+        if not isinstance(pipeline, dict):
+            return False
+        tts = pipeline.get("tts") or {}
+        return isinstance(tts, dict) and bool(tts.get("voice"))
+
+    def timestamp(value) -> float:
+        if not isinstance(value, datetime):
+            return 0.0
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value.timestamp()
+
+    candidates = []
+    for item in matching:
+        # get_all_workflows has no guaranteed ordering and this organization
+        # already contains duplicate seeded names. Re-fetch each candidate to
+        # inspect its pinned config, then choose the newest workflow carrying
+        # an explicit TTS voice before considering unconfigured duplicates.
+        workflow = await db_client.get_workflow(
+            item.id, organization_id=user.selected_organization_id
+        )
+        if workflow is None:
+            continue
+        draft = await db_client.get_draft_version(workflow.id)
+        selected_definition = (
+            draft
+            or workflow.released_definition
+            or workflow.current_definition
+        )
+        definition_config = (
+            getattr(selected_definition, "workflow_configurations", None)
+            if selected_definition
+            else None
+        )
+        configurations = (
+            definition_config
+            if isinstance(definition_config, dict) and definition_config
+            else workflow.workflow_configurations
+        )
+        candidates.append(
+            (
+                has_tts_voice_override(configurations),
+                timestamp(getattr(selected_definition, "created_at", None)),
+                timestamp(getattr(workflow, "created_at", None)),
+                workflow.id,
+                workflow,
+            )
+        )
+
+    if candidates:
+        workflow = max(candidates, key=lambda candidate: candidate[:4])[4]
+    else:
+        workflow = await db_client.create_workflow(
             name,
             definition,
             user.id,
             user.selected_organization_id,
         )
-
-    # Re-fetch through get_workflow so definition relationships are
-    # eager-loaded; objects from get_all_workflows/create_workflow are
-    # detached and lazy-loading released_definition raises
-    # DetachedInstanceError in prepare_workflow_run_inputs.
-    workflow = await db_client.get_workflow(
-        existing.id, organization_id=user.selected_organization_id
-    )
+        # Re-fetch newly-created workflows so definition relationships are
+        # eager-loaded before they are passed to prepare_workflow_run_inputs.
+        workflow = await db_client.get_workflow(
+            workflow.id, organization_id=user.selected_organization_id
+        )
 
     released = workflow.released_definition
     if released is not None and (

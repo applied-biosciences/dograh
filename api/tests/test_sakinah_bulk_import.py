@@ -228,6 +228,15 @@ async def test_saudian_title_prefix_and_utf8_arabic_are_preserved():
     assert committed["items"][0]["scenario_title"] == title
 
 
+async def test_other_language_is_preserved_in_bulk_import():
+    response, db = await preview([
+        upload_json("welsh.json", scenario("Welsh", language="Other", other_language="Welsh"))
+    ])
+    await commit(response, db, "import_as_new")
+    assert db.items[0]["language"] == "Other"
+    assert db.items[0]["other_language"] == "Welsh"
+
+
 async def test_partial_import_failure_has_independent_outcomes():
     db = FailingScenarioDB()
     response, _ = await preview([

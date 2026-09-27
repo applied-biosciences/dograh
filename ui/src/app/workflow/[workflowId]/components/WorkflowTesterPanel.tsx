@@ -16,6 +16,7 @@ import { useOnboarding } from "@/context/OnboardingContext";
 import { useAuth } from "@/lib/auth";
 import { cn, getRandomId } from "@/lib/utils";
 
+import { primeBrowserAudioOutput } from "../run/[runId]/hooks";
 import { AiSimulatorPlaceholder } from "./workflow-tester/AiSimulatorPlaceholder";
 import { EmbeddedVoiceTester } from "./workflow-tester/EmbeddedVoiceTester";
 import { ManualTextChatPanel } from "./workflow-tester/ManualTextChatPanel";
@@ -98,6 +99,11 @@ export function WorkflowTesterPanel({
 
     const createVoiceRun = useCallback(async () => {
         if (!accessToken || disabled) return;
+        // Keep audio activation inside the user's Run Test gesture. Run
+        // creation and tester mounting are asynchronous, so waiting until
+        // EmbeddedVoiceTester auto-starts can leave the remote track muted by
+        // browser autoplay policy.
+        primeBrowserAudioOutput();
         setCreatingVoiceRun(true);
         try {
             const response = await createWorkflowRunApiV1WorkflowWorkflowIdRunsPost({
@@ -141,11 +147,24 @@ export function WorkflowTesterPanel({
         !!accessToken &&
         !testerBlocked;
 
+    const handleModeChange = (value: string) => {
+        const mode = value as "audio" | "text";
+        setActiveMode(mode);
+        if (mode !== "audio") {
+            // Leaving this tab unmounts EmbeddedVoiceTester, whose cleanup closes
+            // the socket and peer connection — the call is over at that point and
+            // the backend completes the run. A run may only be called once, so
+            // release the id here; coming back mints a fresh one rather than
+            // re-offering a finished run.
+            setVoiceRunId(null);
+        }
+    };
+
     return (
         <div className={cn("flex h-full min-h-0 flex-col bg-background", className)}>
             <Tabs
                 value={activeMode}
-                onValueChange={(value) => setActiveMode(value as "audio" | "text")}
+                onValueChange={handleModeChange}
                 className="min-h-0 flex-1 gap-0"
             >
                 <div className="border-b border-border/70 px-4 py-3">

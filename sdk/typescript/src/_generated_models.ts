@@ -313,6 +313,22 @@ export interface components {
             disposition_codes: string[];
         };
         /**
+         * CallDispositionOption
+         * @description One business outcome the terminal classifier may select.
+         */
+        CallDispositionOption: {
+            /**
+             * Code
+             * @description Stable code recorded when this outcome is selected.
+             */
+            code: string;
+            /**
+             * Description
+             * @description Business criteria for selecting this disposition.
+             */
+            description: string;
+        };
+        /**
          * ContextDestinationMappingConfig
          * @description Resolve a transfer destination from gathered or initial context.
          *
@@ -392,7 +408,7 @@ export interface components {
              * @default http_api
              * @enum {string}
              */
-            category: "http_api" | "end_call" | "transfer_call" | "calculator" | "native" | "integration" | "mcp";
+            category: "http_api" | "end_call" | "transfer_call" | "transfer_agent" | "calculator" | "native" | "integration" | "mcp";
             /**
              * Icon
              * @description Lucide icon identifier.
@@ -409,7 +425,7 @@ export interface components {
              * Definition
              * @description Typed tool definition.
              */
-            definition: components["schemas"]["HttpApiToolDefinition"] | components["schemas"]["EndCallToolDefinition"] | components["schemas"]["TransferCallToolDefinition"] | components["schemas"]["CalculatorToolDefinition"] | components["schemas"]["McpToolDefinition"];
+            definition: components["schemas"]["HttpApiToolDefinition"] | components["schemas"]["EndCallToolDefinition"] | components["schemas"]["TransferCallToolDefinition"] | components["schemas"]["TransferAgentToolDefinition"] | components["schemas"]["CalculatorToolDefinition"] | components["schemas"]["McpToolDefinition"];
         };
         /** CreateWorkflowRequest */
         CreateWorkflowRequest: {
@@ -1162,6 +1178,53 @@ export interface components {
             created_by?: components["schemas"]["CreatedByResponse"] | null;
         };
         /**
+         * TransferAgentConfig
+         * @description Configuration for Transfer Agent tools.
+         *
+         *     One tool, one destination. An agent that can hand the caller to several
+         *     places gets several of these tools, and the model chooses between them the
+         *     way it chooses between any other tools -- by their names and descriptions.
+         *     That keeps the routing decision in the one place the model already reasons
+         *     about, and leaves nothing to configure here but where the call goes.
+         *
+         *     Everything about how a handoff sounds is fixed: the caller hears a ringer
+         *     while the next agent is prepared, and that agent opens with its own
+         *     configured greeting. Only the handover line is configurable, because it is
+         *     caller-facing and Dograh runs in more than one language.
+         */
+        TransferAgentConfig: {
+            /**
+             * Workflow Id
+             * @description Id of the Dograh agent to transfer to. Must be in the same organization, and must not be a speech-to-speech agent.
+             */
+            workflow_id: number;
+            /**
+             * Message
+             * @description Spoken by the current agent, in its own voice, before the caller is handed over. Supports template variables. Leave empty to hand over without saying anything.
+             * @default Let me connect you with the right person. One moment please.
+             */
+            message: string;
+        };
+        /**
+         * TransferAgentToolDefinition
+         * @description Tool definition for Transfer Agent tools.
+         */
+        TransferAgentToolDefinition: {
+            /**
+             * Schema Version
+             * @description Schema version.
+             * @default 1
+             */
+            schema_version: number;
+            /**
+             * @description Tool type. (enum property replaced by openapi-typescript)
+             * @enum {string}
+             */
+            type: "transfer_agent";
+            /** @description Transfer Agent configuration. */
+            config: components["schemas"]["TransferAgentConfig"];
+        };
+        /**
          * TransferCallConfig
          * @description Configuration for Transfer Call tools.
          */
@@ -1202,6 +1265,11 @@ export interface components {
              * @default 30
              */
             timeout: number;
+            /**
+             * Call Disposition
+             * @description Optional disposition to record after a successful transfer. When omitted, Dograh records its provider-specific transfer default.
+             */
+            call_disposition?: string | null;
             /**
              * Parameters
              * @description Parameters the model may provide when calling this transfer tool, for example state, department, or transfer reason.
@@ -1281,17 +1349,12 @@ export interface components {
              * @default default
              * @enum {string}
              */
-            turn_start_strategy: "default" | "min_words" | "provisional_vad";
+            turn_start_strategy: "default" | "min_words";
             /**
              * Turn Start Min Words
              * @default 3
              */
             turn_start_min_words: number;
-            /**
-             * Provisional Vad Pause Secs
-             * @default 1.5
-             */
-            provisional_vad_pause_secs: number;
             /**
              * Turn Stop Strategy
              * @default transcription
@@ -1308,6 +1371,11 @@ export interface components {
              * @default false
              */
             context_compaction_enabled: boolean;
+            /**
+             * Call Dispositions
+             * @description Allowed business outcomes for terminal call classification. Each entry defines the exact stored code and the criteria for selecting it.
+             */
+            call_dispositions?: components["schemas"]["CallDispositionOption"][];
             /**
              * Text Chat Inactivity Timeout Seconds
              * @default 1800
@@ -1390,6 +1458,7 @@ export interface components {
 export type AmbientNoiseConfigurationDefaults = components['schemas']['AmbientNoiseConfigurationDefaults'];
 export type CalculatorToolDefinition = components['schemas']['CalculatorToolDefinition'];
 export type CallDispositionCodes = components['schemas']['CallDispositionCodes'];
+export type CallDispositionOption = components['schemas']['CallDispositionOption'];
 export type ContextDestinationMappingConfig = components['schemas']['ContextDestinationMappingConfig'];
 export type ContextDestinationRoute = components['schemas']['ContextDestinationRoute'];
 export type ContextDestinationRule = components['schemas']['ContextDestinationRule'];
@@ -1426,6 +1495,8 @@ export type RecordingListResponseSchema = components['schemas']['RecordingListRe
 export type RecordingResponseSchema = components['schemas']['RecordingResponseSchema'];
 export type ToolParameter = components['schemas']['ToolParameter'];
 export type ToolResponse = components['schemas']['ToolResponse'];
+export type TransferAgentConfig = components['schemas']['TransferAgentConfig'];
+export type TransferAgentToolDefinition = components['schemas']['TransferAgentToolDefinition'];
 export type TransferCallConfig = components['schemas']['TransferCallConfig'];
 export type TransferCallToolDefinition = components['schemas']['TransferCallToolDefinition'];
 export type UpdateWorkflowRequest = components['schemas']['UpdateWorkflowRequest'];

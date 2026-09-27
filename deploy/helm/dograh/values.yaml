@@ -123,6 +123,17 @@ config:
   # enabling this without a secret does nothing
   telephonyWsTokenEnforce: false
 
+  # SpatialReal AvatarKit. The app/avatar ids are non-secret deployment
+  # configuration; the API key belongs under secrets.spatialrealApiKey.
+  spatialrealAppId: ""
+  spatialrealAvatarId: ""
+  spatialrealRegion: us-west
+  spatialrealMode: sdk
+  spatialrealConsoleEndpoint: ""  # empty uses the region-derived SDK default
+  spatialrealIngressEndpoint: ""  # empty uses the region-derived SDK default
+  spatialrealTokenTtl: 43200
+  spatialrealMaxSessions: 10
+
 # -----------------------------------------------------------------------------
 # Secrets — rendered into a Kubernetes Secret unless secrets.existingSecret is
 # set. NEVER commit real values here; override via -f overrides.yaml or
@@ -161,12 +172,21 @@ secrets:
   langfusePublicKey: ""
   langfuseHost: ""
   langfuseProjectId: ""
+  # Traces are private by default. "true" makes traces in the project above
+  # readable by anyone holding the trace URL, with no Langfuse login.
+  # Organizations that connected their own Langfuse project in the UI carry
+  # their own visibility setting instead.
+  langfuseTracesPublic: ""
 
   # Signs the telephony media WebSocket URL the carrier dials back, so the ids
   # in that URL are no longer enough on their own to open the socket. Empty
   # leaves the URLs unchanged and the check off. When using secrets.existingSecret, put it
   # under the TELEPHONY_WS_TOKEN_SECRET key there.
   telephonyWsTokenSecret: ""
+
+  # SpatialReal server credential. Prefer secrets.existingSecret in production;
+  # the referenced Secret must expose this as SPATIALREAL_API_KEY.
+  spatialrealApiKey: ""
 
 # -----------------------------------------------------------------------------
 # Web tier (FastAPI + WebSocket signaling)
@@ -280,6 +300,33 @@ workers:
     periodSeconds: 30
     timeoutSeconds: 5
     failureThreshold: 3
+
+  # Gates rolling updates. Without it a container is Ready as soon as it is
+  # Running, so a crashlooping pod still counts as Available and the Deployment
+  # scales down healthy pods despite maxUnavailable: 0.
+  #
+  # Both checks are per-pod. `arq --check` is not used: its health key is
+  # per-queue, so a healthy sibling would mask a broken pod. Importing
+  # api.tasks.arq is not used either - it pulls in pipecat and re-initialises
+  # S3 storage, ~13s per probe.
+  readinessProbe:
+    exec:
+      command:
+        - sh
+        - -c
+        - |
+          grep -qa api.tasks.arq.WorkerSettings /proc/1/cmdline || exit 1
+          python -c "import os, socket
+          from urllib.parse import urlparse
+          u = urlparse(os.environ['REDIS_URL'])
+          socket.create_connection((u.hostname, u.port or 6379), timeout=3).close()"
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  # Must hold Ready this long before counting as Available.
+  minReadySeconds: 15
 
   podAnnotations: {}
   nodeSelector: {}
@@ -617,7 +664,7 @@ minio:
   # Official upstream MinIO. Root creds are shared with the app (single source of
   # truth) so they can't drift; the app creates its bucket on first use.
   image:
-    registry: docker.io
+    registry: quay.io
     repository: minio/minio
     tag: RELEASE.2025-04-22T22-12-26Z
     pullPolicy: IfNotPresent
