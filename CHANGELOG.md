@@ -2,7 +2,7 @@
 
 ## Sakinah v1.47.0.19 (2026-09-27)
 
-- Split caller/service-user and Sakinah CALM trajectories into separate safety and emotional graphs with labeled axes and score legends.
+- Split caller/service-user and Sakinah CALM trajectories into separate safety and emotional graphs with labeled axes, score legends, and distinct plotted markers.
 - Retained full workflow-definition ZIP export from the agent editor.
 
 ## Sakinah v1.47.0.18 (2026-09-27)

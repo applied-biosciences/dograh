@@ -100,6 +100,34 @@ export function downloadEngineeredPromptHistory(timeline: CalmScoreTimeline) {
 
 const trajectoryColours = ['#2563eb', '#dc2626', '#059669', '#d97706', '#9333ea', '#0891b2', '#db2777', '#65a30d'];
 
+function ScoreMarker({
+    x,
+    y,
+    colour,
+    markerIndex,
+    testId,
+}: {
+    x: number;
+    y: number;
+    colour: string;
+    markerIndex: number;
+    testId: string;
+}) {
+    const common = { fill: colour, stroke: 'white', strokeWidth: 1.25, 'data-testid': testId };
+    switch (markerIndex % 5) {
+        case 0:
+            return <circle cx={x} cy={y} r="4" {...common} />;
+        case 1:
+            return <rect x={x - 3.5} y={y - 3.5} width="7" height="7" {...common} />;
+        case 2:
+            return <path d={`M ${x} ${y - 4.5} L ${x + 4.5} ${y + 3.5} L ${x - 4.5} ${y + 3.5} Z`} {...common} />;
+        case 3:
+            return <path d={`M ${x} ${y - 4.5} L ${x + 4.5} ${y} L ${x} ${y + 4.5} L ${x - 4.5} ${y} Z`} {...common} />;
+        default:
+            return <path d={`M ${x - 4} ${y - 4} L ${x + 4} ${y + 4} M ${x + 4} ${y - 4} L ${x - 4} ${y + 4}`} fill="none" stroke={colour} strokeWidth="2.5" strokeLinecap="round" data-testid={testId} />;
+    }
+}
+
 function CalmTrajectoryGraph({ role, label, turns, category, dimensions }: { role: string; label: string; turns: CalmScoreTurn[]; category: 'safety' | 'emotional'; dimensions: string[] }) {
     if (turns.length === 0 || dimensions.length === 0) return null;
     const width = 920;
@@ -137,12 +165,30 @@ function CalmTrajectoryGraph({ role, label, turns, category, dimensions }: { rol
                         const points = pointsFor(dimension);
                         if (!points) return null;
                         const colour = trajectoryColours[index % trajectoryColours.length];
-                        return <polyline key={dimension} points={points} fill="none" stroke={colour} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />;
+                        return (
+                            <g key={dimension}>
+                                <polyline points={points} fill="none" stroke={colour} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+                                {turns.map((turn, turnIndex) => {
+                                    const score = turn.scores[dimension];
+                                    if (typeof score !== 'number' || !Number.isFinite(score)) return null;
+                                    return (
+                                        <ScoreMarker
+                                            key={`${turn.turn_id ?? turn.turn_index}-${turnIndex}`}
+                                            x={x(turnIndex)}
+                                            y={y(score)}
+                                            colour={colour}
+                                            markerIndex={index}
+                                            testId={`calm-trajectory-marker-${role}-${category}-${index}-${turnIndex}`}
+                                        />
+                                    );
+                                })}
+                            </g>
+                        );
                     })}
                 </svg>
             </div>
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs" aria-label="Score names">
-                {dimensions.map((dimension, index) => <span key={dimension} className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: trajectoryColours[index % trajectoryColours.length] }} />line: {dimension}</span>)}
+                {dimensions.map((dimension, index) => <span key={dimension} className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: trajectoryColours[index % trajectoryColours.length] }} />line/marker: {dimension}</span>)}
             </div>
             <p className="mt-2 text-[11px] text-muted-foreground">Y-axis: score (0–10) · X-axis: turn</p>
         </div>
