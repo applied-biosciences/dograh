@@ -15,7 +15,7 @@
   with the configured AWS S3 secondary replication path. The Dograh database
   must only be pointed at an RDS instance provisioned for Dograh; the existing
   survey RDS instances are not compatible targets.
-- Bumped application, UI package/lockfile, and release metadata to
+- Bumped application, UI package/lockfile, Helm app, and release metadata to
   `v1.47.0.10`.
 
 ## Sakinah v1.47.0.9 (2026-09-27)
