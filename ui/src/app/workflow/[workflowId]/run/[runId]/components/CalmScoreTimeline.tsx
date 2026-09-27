@@ -98,6 +98,58 @@ export function downloadEngineeredPromptHistory(timeline: CalmScoreTimeline) {
     );
 }
 
+const trajectoryColours = ['#2563eb', '#dc2626', '#059669', '#d97706', '#9333ea', '#0891b2', '#db2777', '#65a30d'];
+
+function CalmTrajectoryGraph({ role, turns }: { role: string; turns: CalmScoreTurn[] }) {
+    const dimensions = Array.from(new Set(turns.flatMap((turn) => Object.keys(turn.scores))));
+    if (turns.length === 0 || dimensions.length === 0) return null;
+    const width = 920;
+    const height = 300;
+    const margin = { top: 22, right: 20, bottom: 42, left: 48 };
+    const plotWidth = width - margin.left - margin.right;
+    const plotHeight = height - margin.top - margin.bottom;
+    const x = (index: number) => margin.left + (turns.length === 1 ? plotWidth / 2 : (index / (turns.length - 1)) * plotWidth);
+    const y = (score: number) => margin.top + plotHeight - (Math.max(0, Math.min(10, score)) / 10) * plotHeight;
+    const pointsFor = (dimension: string) => turns.map((turn, index) => {
+        const score = turn.scores[dimension];
+        return typeof score === 'number' && Number.isFinite(score) ? `${x(index)},${y(score)}` : null;
+    }).filter((point): point is string => point !== null).join(' ');
+
+    return (
+        <div className="mt-5 rounded-md border border-border bg-background p-3" data-testid={`calm-trajectory-${role}`}>
+            <h4 className="mb-2 text-sm font-semibold">Score trajectories</h4>
+            <div className="overflow-x-auto">
+                <svg viewBox={`0 0 ${width} ${height}`} className="h-auto min-w-[680px] w-full" role="img" aria-label={`${role} CALM score trajectories`}>
+                    {[0, 2, 4, 6, 8, 10].map((tick) => (
+                        <g key={tick}>
+                            <line x1={margin.left} x2={width - margin.right} y1={y(tick)} y2={y(tick)} stroke="currentColor" className="text-border" strokeDasharray="3 3" />
+                            <text x={margin.left - 10} y={y(tick) + 4} textAnchor="end" className="fill-muted-foreground text-[11px]">{tick}</text>
+                        </g>
+                    ))}
+                    {turns.map((turn, index) => (
+                        <g key={`${turn.turn_id ?? turn.turn_index}-${index}`}>
+                            <line x1={x(index)} x2={x(index)} y1={height - margin.bottom} y2={height - margin.bottom + 5} stroke="currentColor" className="text-muted-foreground" />
+                            <text x={x(index)} y={height - margin.bottom + 20} textAnchor="middle" className="fill-muted-foreground text-[11px]">{turn.turn_index}</text>
+                        </g>
+                    ))}
+                    <line x1={margin.left} x2={margin.left} y1={margin.top} y2={height - margin.bottom} stroke="currentColor" className="text-muted-foreground" />
+                    <line x1={margin.left} x2={width - margin.right} y1={height - margin.bottom} y2={height - margin.bottom} stroke="currentColor" className="text-muted-foreground" />
+                    {dimensions.map((dimension, index) => {
+                        const points = pointsFor(dimension);
+                        if (!points) return null;
+                        const colour = trajectoryColours[index % trajectoryColours.length];
+                        return <polyline key={dimension} points={points} fill="none" stroke={colour} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />;
+                    })}
+                </svg>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs" aria-label="Score names">
+                {dimensions.map((dimension, index) => <span key={dimension} className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: trajectoryColours[index % trajectoryColours.length] }} />line: {dimension}</span>)}
+            </div>
+            <p className="mt-2 text-[11px] text-muted-foreground">Y-axis: score (0–10) · X-axis: turn</p>
+        </div>
+    );
+}
+
 export function CalmScoreTimelineSection({
     timeline,
     title = 'CALM score timeline',
@@ -192,6 +244,7 @@ export function CalmScoreTimelineSection({
                                 </details>
                             ))}
                         </div>
+                        <CalmTrajectoryGraph role={roleLabel(role.role)} turns={role.turns} />
                     </section>
                 ))}
             </CardContent>

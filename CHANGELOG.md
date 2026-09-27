@@ -1,5 +1,10 @@
 # Changelog
 
+## Sakinah v1.47.0.17 (2026-09-27)
+
+- Added end-of-call CALM score trajectory graphs to Run Details, with separate incoming caller/service-user and Sakinah panels, score-name legends, y-axis score ticks, and x-axis turn ticks.
+- Bumped release metadata and UI package version to `1.47.0.17`.
+
 ## Sakinah v1.47.0.16 (2026-09-27)
 
 - Fixed the active-call CALM gap for Agent Run Tests, inbound WebRTC, and
