@@ -189,6 +189,113 @@ def _scenario_dict(scenario: SakinahScenarioModel) -> dict[str, Any]:
 
 
 class SakinahPersistenceClient(BaseDBClient):
+    async def update_call_calm_score_progress(
+        self,
+        *,
+        workflow_run_id: int,
+        organization_id: int,
+        calm_turns: list[dict[str, Any]],
+    ) -> bool:
+        """Upsert ongoing score-only history for an ordinary Sakinah call.
+
+        This is deliberately organization-scoped even though it is invoked by
+        the call worker: a stale/background task must never write a score row
+        for a run belonging to another tenant.
+        """
+        async with self.async_session() as session:
+            authorized = (
+                await session.execute(
+                    select(WorkflowRunModel.id)
+                    .join(WorkflowModel)
+                    .where(
+                        WorkflowRunModel.id == workflow_run_id,
+                        WorkflowModel.organization_id == organization_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if authorized is None:
+                return False
+            calm_score, safety_score, clinical_evaluation = _structured_call_scores(
+                calm_turns
+            )
+            result = await session.execute(
+                select(CallScoreModel).where(
+                    CallScoreModel.agent_run_id == workflow_run_id
+                )
+            )
+            call_score = result.scalars().first()
+            if call_score is None:
+                session.add(
+                    CallScoreModel(
+                        agent_run_id=workflow_run_id,
+                        calm_score=calm_score,
+                        safety_score=safety_score,
+                        clinical_evaluation=clinical_evaluation,
+                    )
+                )
+            else:
+                call_score.calm_score = calm_score
+                call_score.safety_score = safety_score
+                call_score.clinical_evaluation = clinical_evaluation
+            await session.commit()
+            return True
+
+    async def get_calm_score_timeline(
+        self,
+        *,
+        workflow_run_id: int,
+        organization_id: int,
+    ) -> dict[str, Any] | None:
+        """Fetch authorized score tracks for a simulation or ordinary call."""
+        paired = await self.get_paired_calm_score_timeline(
+            workflow_run_id=workflow_run_id,
+            organization_id=organization_id,
+        )
+        if paired is not None:
+            return paired
+
+        async with self.async_session() as session:
+            run = (
+                await session.execute(
+                    select(WorkflowRunModel)
+                    .join(WorkflowModel)
+                    .where(
+                        WorkflowRunModel.id == workflow_run_id,
+                        WorkflowModel.organization_id == organization_id,
+                    )
+                )
+            ).scalars().first()
+            if run is None:
+                return None
+            score = (
+                await session.execute(
+                    select(CallScoreModel).where(
+                        CallScoreModel.agent_run_id == workflow_run_id
+                    )
+                )
+            ).scalars().first()
+            turns = _timeline_turns(score)
+            if not turns:
+                return None
+            role_turns: dict[str, list[dict[str, Any]]] = {}
+            for turn in turns:
+                role = turn.get("role") or SERVICE_USER_ROLE
+                role_turns.setdefault(role, []).append(turn)
+            return {
+                "session_id": str(workflow_run_id),
+                "status": run.call_status or ("completed" if run.is_completed else "running"),
+                "roles": [
+                    {
+                        "role": role,
+                        "run_id": workflow_run_id,
+                        "workflow_id": run.workflow_id,
+                        "turns": role_turns[role],
+                    }
+                    for role in (SAKINAH_ROLE, SERVICE_USER_ROLE)
+                    if role in role_turns
+                ],
+            }
+
     async def get_paired_calm_score_timeline(
         self,
         *,
@@ -241,7 +348,7 @@ class SakinahPersistenceClient(BaseDBClient):
             score_rows = (
                 await session.execute(
                     select(CallScoreModel).where(
-                        CallScoreModel.agent_run_id.in_(authorized_workflows)
+                        CallScoreModel.agent_run_id.in_(authorized_workflows.keys())
                     )
                 )
             ).scalars().all()

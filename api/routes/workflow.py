@@ -1484,7 +1484,7 @@ async def get_workflow_run(
     ) and not public_access_token:
         public_access_token = await db_client.ensure_public_access_token(run.id)
 
-    calm_score_timeline = await db_client.get_paired_calm_score_timeline(
+    calm_score_timeline = await db_client.get_calm_score_timeline(
         workflow_run_id=run.id,
         organization_id=user.selected_organization_id,
     )

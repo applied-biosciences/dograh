@@ -316,3 +316,70 @@ async def test_run_details_exposes_paired_score_only_timeline_in_org(
                 f"/api/v1/workflow/{caller_workflow.id}/runs/{caller_run.id}"
             )
         ).status_code == 404
+
+
+async def test_normal_sakinah_run_persists_role_aware_score_timeline_in_org(
+    test_client_factory, db_session
+):
+    """Browser tests and incoming calls share one run but retain both roles."""
+    owner = await _make_user(db_session, "normal_calm_owner")
+    outsider = await _make_user(db_session, "normal_calm_outsider")
+    workflow = await db_session.create_workflow(
+        "Sakinah Scenario Console", {}, owner.id, owner.selected_organization_id
+    )
+    run = await db_session.create_workflow_run(
+        "Normal Sakinah call",
+        workflow.id,
+        WorkflowRunMode.SMALLWEBRTC.value,
+        owner.id,
+        call_type=CallType.INBOUND,
+        organization_id=owner.selected_organization_id,
+    )
+    persisted = await db_session.update_call_calm_score_progress(
+        workflow_run_id=run.id,
+        organization_id=owner.selected_organization_id,
+        calm_turns=[
+            {
+                "turn_id": "service_user-1",
+                "role": "service_user",
+                "scoring_method": "llm_evaluation",
+                "scored_at": "2026-09-27T11:00:01+00:00",
+                "calm_scores": {"state.emotion.anxiety_fear": 7},
+                "calm_confidence": {"state.emotion.anxiety_fear": 8},
+                "utterance_verbatim": "must not persist",
+            },
+            {
+                "turn_id": "sakinah-1",
+                "role": "sakinah",
+                "scoring_method": "llm_evaluation",
+                "scored_at": "2026-09-27T11:00:02+00:00",
+                "calm_scores": {"response_quality.empathy": 9},
+                "calm_confidence": {"response_quality.empathy": 8},
+                "prompt_sent_to_llm": "must not persist",
+            },
+        ],
+    )
+    assert persisted is True
+
+    async with test_client_factory(owner) as client:
+        response = await client.get(f"/api/v1/workflow/{workflow.id}/runs/{run.id}")
+        assert response.status_code == 200, response.text
+        timeline = response.json()["calm_score_timeline"]
+        assert [track["role"] for track in timeline["roles"]] == [
+            "sakinah",
+            "service_user",
+        ]
+        assert all(track["run_id"] == run.id for track in timeline["roles"])
+        assert "must not persist" not in response.text
+
+    # The worker's organization-scoped write and the details endpoint both
+    # refuse cross-tenant access to an otherwise valid run id.
+    assert (
+        await db_session.update_call_calm_score_progress(
+            workflow_run_id=run.id,
+            organization_id=outsider.selected_organization_id,
+            calm_turns=[],
+        )
+    ) is False
+    async with test_client_factory(outsider) as client:
+        assert (await client.get(f"/api/v1/workflow/{workflow.id}/runs/{run.id}")).status_code == 404

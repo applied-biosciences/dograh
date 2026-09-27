@@ -26,7 +26,7 @@ export function CalmScoreTimelineSection({ timeline }: { timeline: CalmScoreTime
     const rolesWithTurns = timeline.roles.filter((role) => role.turns.length > 0);
     if (rolesWithTurns.length === 0) return null;
 
-    const roleLabel = (role: string) => role === 'sakinah' ? 'Sakinah' : 'Incoming service-user bot';
+    const roleLabel = (role: string) => role === 'sakinah' ? 'Sakinah' : 'Incoming caller / service user';
     const formatValue = (value: number | string | null | undefined) => value == null ? '—' : String(value);
     const trendFor = (turn: CalmScoreTurn, dimension: string) => {
         const direct = turn.trend[dimension];
@@ -47,7 +47,7 @@ export function CalmScoreTimelineSection({ timeline }: { timeline: CalmScoreTime
             <CardHeader>
                 <CardTitle className="text-lg">CALM score timeline</CardTitle>
                 <p className="text-sm text-muted-foreground">
-                    Ongoing score-only snapshots for this simulation pair. Each role is stored on its own native run.
+                    Ongoing score-only snapshots for this call. Simulation roles remain on their native runs; ordinary calls keep both role tracks on this run.
                 </p>
             </CardHeader>
             <CardContent className="space-y-5">

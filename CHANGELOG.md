@@ -1,5 +1,21 @@
 # Changelog
 
+## Sakinah v1.47.0.13 (2026-09-27)
+
+- Extended CALM scoring from AI-to-AI simulations to standard browser Agent Run
+  Tests and live incoming Sakinah calls. Final caller and Sakinah responses are
+  evaluated asynchronously as the call progresses, without delaying audio.
+- Persisted role-aware, score-only histories to the authorized Dograh
+  `call_scores` row and one immutable per-turn MinIO JSON object, retaining
+  configured S3-secondary replication. No score artifact includes transcript
+  text, prompts, responses, evidence snippets, credentials, or secrets.
+- Extended Run Details to present ordinary calls as separate Sakinah and
+  caller/service-user tracks at the bottom of the summary, while retaining
+  paired native-run timelines for simulations. Fixed simulation score lookup
+  to query native run IDs rather than workflow IDs.
+- Bumped application, UI package/lockfile, Helm app, and release metadata to
+  `v1.47.0.13`.
+
 ## Sakinah v1.47.0.12 (2026-09-27)
 
 - Added an organization-scoped paired-role CALM timeline to the bottom of the

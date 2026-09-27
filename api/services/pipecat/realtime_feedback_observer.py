@@ -327,6 +327,9 @@ def register_turn_log_handlers(
     transcript_coordinator: "TranscriptLogCoordinator",
     user_aggregator,
     assistant_aggregator,
+    *,
+    on_user_turn: Callable[[object], Awaitable[None] | None] | None = None,
+    on_assistant_turn: Callable[[object], Awaitable[None] | None] | None = None,
 ):
     """Register event handlers on aggregators to persist final turn transcripts.
 
@@ -345,6 +348,13 @@ def register_turn_log_handlers(
             )
         except Exception as e:
             logger.error(f"Failed to coordinate user turn transcript: {e}")
+        if on_user_turn is not None:
+            try:
+                callback_result = on_user_turn(message)
+                if callback_result is not None:
+                    await callback_result
+            except Exception as e:
+                logger.warning(f"Failed to queue user turn CALM scoring: {e}")
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
     async def on_assistant_turn_stopped(aggregator, message):
@@ -357,3 +367,10 @@ def register_turn_log_handlers(
                 )
             except Exception as e:
                 logger.error(f"Failed to coordinate assistant turn transcript: {e}")
+            if on_assistant_turn is not None:
+                try:
+                    callback_result = on_assistant_turn(message)
+                    if callback_result is not None:
+                        await callback_result
+                except Exception as e:
+                    logger.warning(f"Failed to queue assistant turn CALM scoring: {e}")

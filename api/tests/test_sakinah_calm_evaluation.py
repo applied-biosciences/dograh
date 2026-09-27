@@ -17,6 +17,7 @@ from api.services.sakinah.calm_evaluation import (
     parse_service_user_evaluation,
     run_llm_inference,
 )
+from api.services.sakinah.calm.live_call import LiveCallCalmTracker
 from api.services.sakinah.simulation import Simulation, SimulationManager
 
 
@@ -262,3 +263,53 @@ async def test_evaluation_llm_uses_pinned_run_configuration_without_lazy_loading
         correlation_id="correlation-1",
         usage_context="calm_evaluation",
     )
+
+
+async def test_live_call_tracker_persists_each_role_turn_without_text(monkeypatch):
+    """The normal WebRTC/telephony path writes each completed score promptly."""
+    tracker = LiveCallCalmTracker(
+        workflow_run_id=71,
+        organization_id=17,
+        user_config=SimpleNamespace(),
+        correlation_id="correlation-71",
+    )
+    service_user = ServiceUserEvaluationResult(
+        **_service_user_payload(),
+        turn_id="service_user-1",
+        trend={},
+        evaluated_at="2026-09-27T12:00:01+00:00",
+    )
+    from api.services.sakinah.calm_evaluation import SakinahEvaluationResult
+
+    sakinah = SakinahEvaluationResult(
+        **_sakinah_payload(),
+        turn_id="sakinah-1",
+        evaluated_at="2026-09-27T12:00:02+00:00",
+    )
+    tracker._evaluator = AsyncMock()
+    tracker._evaluator.evaluate.side_effect = [service_user, sakinah]
+    database_write = AsyncMock(return_value=True)
+    object_write = AsyncMock(return_value={"status": "success"})
+    monkeypatch.setattr(
+        "api.services.sakinah.calm.live_call.db_client.update_call_calm_score_progress",
+        database_write,
+    )
+    monkeypatch.setattr(
+        "api.services.workflow_run_artifacts.persist_calm_score_snapshot",
+        object_write,
+    )
+
+    await tracker.record_turn("service_user", "private caller utterance")
+    await tracker.record_turn("sakinah", "private Sakinah response")
+    await tracker.flush()
+
+    assert database_write.await_count == 2
+    assert object_write.await_count == 2
+    stored_history = database_write.await_args.kwargs["calm_turns"]
+    assert [turn["role"] for turn in stored_history] == ["service_user", "sakinah"]
+    assert "private caller utterance" not in str(stored_history)
+    assert "private Sakinah response" not in str(stored_history)
+    assert [call.kwargs["role"] for call in object_write.await_args_list] == [
+        "service_user",
+        "sakinah",
+    ]

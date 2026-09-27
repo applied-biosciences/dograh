@@ -3,6 +3,7 @@
 import sentry_sdk
 
 from api.constants import (
+    APP_VERSION,
     CORS_ALLOWED_ORIGINS,
     DEPLOYMENT_MODE,
     ENABLE_TELEMETRY,
@@ -90,7 +91,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Dograh API",
     description="API for the Dograh app",
-    version="1.0.0",
+    version=APP_VERSION,
     openapi_url=f"{API_PREFIX}/openapi.json",
     lifespan=lifespan,
     servers=[

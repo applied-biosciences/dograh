@@ -1078,6 +1078,24 @@ async def _run_pipeline_impl(
     user_context_aggregator = context_aggregator.user()
     assistant_context_aggregator = context_aggregator.assistant()
 
+    # Simulations inject their own paired-role callbacks.  Every other run of
+    # the Sakinah supporter workflow (browser agent test or real telephony
+    # caller) gets the same ongoing, role-aware scoring without holding up the
+    # audio pipeline.  The tracker persists only score projections.
+    calm_live_tracker = None
+    if not calm_prompt_callback and not calm_response_callback:
+        from api.services.sakinah.workflow import is_sakinah_workflow
+
+        if is_sakinah_workflow(workflow):
+            from api.services.sakinah.calm.live_call import LiveCallCalmTracker
+
+            calm_live_tracker = LiveCallCalmTracker(
+                workflow_run_id=workflow_run_id,
+                organization_id=workflow.organization_id,
+                user_config=user_config,
+                correlation_id=mps_correlation_id,
+            )
+
     if answer_supervisor is not None:
         answer_supervisor.bind(user_context_aggregator)
         engine.set_answer_supervisor(
@@ -1314,6 +1332,18 @@ async def _run_pipeline_impl(
         transcript_log_coordinator,
         user_context_aggregator,
         assistant_context_aggregator,
+        on_user_turn=(
+            lambda message: calm_live_tracker.record_turn(
+                "service_user", message.content
+            )
+            if calm_live_tracker is not None
+            else None
+        ),
+        on_assistant_turn=(
+            lambda message: calm_live_tracker.record_turn("sakinah", message.content)
+            if calm_live_tracker is not None
+            else None
+        ),
     )
 
     if calm_response_callback:
@@ -1353,6 +1383,10 @@ async def _run_pipeline_impl(
     except asyncio.CancelledError:
         logger.warning("Received CancelledError in _run_pipeline")
     finally:
+        if calm_live_tracker is not None:
+            # A terminal call detail view should not race a final submitted
+            # score.  Evaluation failures remain isolated inside the tracker.
+            await calm_live_tracker.flush()
         # Close MCP sessions here, not in engine.cleanup(). The anyio cancel
         # scopes opened by MCPClient.start() in engine.initialize() are
         # task-affine; this finally runs in the same task as initialize(),
