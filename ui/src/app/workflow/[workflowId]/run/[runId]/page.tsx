@@ -820,7 +820,7 @@ export default function WorkflowRunPage() {
             cancelled = true;
             window.clearInterval(interval);
         };
-    }, [auth.isAuthenticated, auth.loading, params.workflowId, params.runId, workflowRun?.is_completed]);
+    }, [auth.isAuthenticated, auth.loading, params.workflowId, params.runId, workflowRun]);
 
     let returnValue = null;
     const isTextChatRun = workflowRun?.mode === WORKFLOW_RUN_MODES.TEXTCHAT;
