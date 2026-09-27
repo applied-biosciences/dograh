@@ -63,6 +63,18 @@ for filename in ("ui/package.json", "ui/package-lock.json"):
     if count != (2 if filename.endswith("package-lock.json") else 1):
         raise SystemExit(f"Could not update {filename} version")
     path.write_text(text)
+
+chart = root / "deploy/helm/dograh/Chart.yaml"
+chart_text = chart.read_text()
+chart_text, count = re.subn(
+    r'(?m)^appVersion: "[^"]+"$',
+    f'appVersion: "{version}"',
+    chart_text,
+    count=1,
+)
+if count != 1:
+    raise SystemExit("Could not update Helm appVersion")
+chart.write_text(chart_text)
 PY
 
 "$ROOT_DIR/scripts/check_version_sync.sh"
