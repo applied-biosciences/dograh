@@ -89,7 +89,7 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik-proxy}"
       # Audio file downloads. Highest priority so it wins over the UI catch-all.
-      - "traefik.http.routers.dograh-audio.rule=Host(`${PUBLIC_HOST}`) && PathPrefix(`/voice-audio`)"
+      - "traefik.http.routers.dograh-audio.rule=(Host(`${PUBLIC_HOST}`) || Host(`${ADDITIONAL_PUBLIC_HOST:-unused.invalid}`)) && PathPrefix(`/voice-audio`)"
       - "traefik.http.routers.dograh-audio.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
       - "traefik.http.routers.dograh-audio.tls=true"
       - "traefik.http.routers.dograh-audio.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
@@ -221,7 +221,7 @@ services:
       # REST API + the signaling WebSocket (/api/v1/ws/signaling/...).
       # Traefik upgrades WebSockets automatically — no extra labels needed.
       # Higher priority than the UI so /api/v1 is matched first.
-      - "traefik.http.routers.dograh-api.rule=Host(`${PUBLIC_HOST}`) && PathPrefix(`/api/v1`)"
+      - "traefik.http.routers.dograh-api.rule=(Host(`${PUBLIC_HOST}`) || Host(`${ADDITIONAL_PUBLIC_HOST:-unused.invalid}`)) && PathPrefix(`/api/v1`)"
       - "traefik.http.routers.dograh-api.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
       - "traefik.http.routers.dograh-api.tls=true"
       - "traefik.http.routers.dograh-api.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
@@ -259,7 +259,7 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik-proxy}"
       # Catch-all for everything that is not /api/v1 or /voice-audio.
-      - "traefik.http.routers.dograh-ui.rule=Host(`${PUBLIC_HOST}`)"
+      - "traefik.http.routers.dograh-ui.rule=Host(`${PUBLIC_HOST}`) || Host(`${ADDITIONAL_PUBLIC_HOST:-unused.invalid}`)"
       - "traefik.http.routers.dograh-ui.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
       - "traefik.http.routers.dograh-ui.tls=true"
       - "traefik.http.routers.dograh-ui.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
