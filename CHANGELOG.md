@@ -1,5 +1,20 @@
 # Changelog
 
+## Sakinah v1.47.0.8 (2026-09-27)
+
+- Fixed new Agent Run finalization after v1.47.0.7: the completion handler now
+  persists termination reason, end time, duration, and completed call status
+  without crashing before transcript, recording, utterance, and score storage.
+- Confirmed the observed failed new rows were present in PostgreSQL but had no
+  transcript, recording metadata, utterances, or MinIO objects because the
+  completion path stopped before artifact upload. New completed calls should
+  again write SQL Run Details plus MinIO transcript/recording objects.
+- Kept ongoing CALM progress durable through the in-progress Sakinah score
+  snapshot path and documented PostgreSQL as the source of truth for scores.
+- Fixed Service User simulator voice resolution when its own workflow has no
+  TTS override: it now inherits only Sakinah's resolved TTS voice while keeping
+  the Service User prompt, LLM, STT, and role-specific workflow binding.
+
 ## Sakinah v1.47.0.7 (2026-09-26)
 
 - Promoted the v1.47.0.7 release to the `Dograh` AWS EC2 deployment and

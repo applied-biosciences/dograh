@@ -388,6 +388,13 @@ class WorkflowRunClient(BaseDBClient):
         state: str | None = None,
         annotations: dict | None = None,
         extra: dict | None = None,
+        started_at: datetime | None = None,
+        connected_at: datetime | None = None,
+        ended_at: datetime | None = None,
+        duration_seconds: float | None = None,
+        call_status: str | None = None,
+        provider_call_id: str | None = None,
+        termination_reason: str | None = None,
     ) -> WorkflowRunModel:
         async with self.async_session() as session:
             # Use SELECT FOR UPDATE to lock the row during the update
@@ -442,6 +449,20 @@ class WorkflowRunClient(BaseDBClient):
                 run.annotations = {**run.annotations, **annotations}
             if extra:
                 run.extra = {**run.extra, **extra}
+            if started_at is not None:
+                run.started_at = started_at
+            if connected_at is not None:
+                run.connected_at = connected_at
+            if ended_at is not None:
+                run.ended_at = ended_at
+            if duration_seconds is not None:
+                run.duration_seconds = duration_seconds
+            if call_status is not None:
+                run.call_status = call_status
+            if provider_call_id is not None:
+                run.provider_call_id = provider_call_id
+            if termination_reason is not None:
+                run.termination_reason = termination_reason
             if is_completed:
                 run.is_completed = is_completed
             if state:

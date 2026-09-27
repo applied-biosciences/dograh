@@ -6,6 +6,7 @@ pair; transcript events stream to browsers over a per-simulation event feed.
 """
 
 import asyncio
+import copy
 import uuid
 from collections import deque
 from datetime import UTC, datetime
@@ -63,6 +64,31 @@ def _format_simulation_transcript(turns: list[dict[str, Any]]) -> str:
         f"[{turn.get('timestamp', '')}] {role_labels.get(turn.get('role'), turn.get('role', 'unknown'))}: {turn.get('text', '')}\n"
         for turn in turns
         if turn.get("text")
+    )
+
+
+def _simulation_workflow_configurations(workflow, definition) -> dict:
+    """Use the pinned definition config, falling back to workflow-level config."""
+    definition_config = (
+        getattr(definition, "workflow_configurations", None) if definition else None
+    )
+    if isinstance(definition_config, dict) and definition_config:
+        return definition_config
+    workflow_config = getattr(workflow, "workflow_configurations", None)
+    return workflow_config if isinstance(workflow_config, dict) else {}
+
+
+def _has_tts_override(config: dict | None) -> bool:
+    if not isinstance(config, dict):
+        return False
+    v2_override = config.get("model_configuration_v2_override")
+    if isinstance(v2_override, dict):
+        pipeline = ((v2_override.get("byok") or {}).get("pipeline") or {})
+        if isinstance(pipeline.get("tts"), dict):
+            return True
+    model_overrides = config.get("model_overrides")
+    return isinstance(model_overrides, dict) and isinstance(
+        model_overrides.get("tts"), dict
     )
 
 
@@ -327,6 +353,7 @@ class SimulationManager:
             (SAKINAH_ROLE, sakinah_workflow, sakinah_transport),
             (SERVICE_USER_ROLE, service_user_workflow, service_user_transport),
         ]
+        resolved_configs: dict[str, Any] = {}
         for role, workflow, transport in roles:
             initial_context = {
                 "scenario": scenario,
@@ -373,13 +400,22 @@ class SimulationManager:
                 run.id, organization_id=user.selected_organization_id
             )
             definition = getattr(persisted_run, "definition", None)
-            workflow_configurations = (
-                definition.workflow_configurations if definition else {}
-            ) or {}
+            workflow_configurations = _simulation_workflow_configurations(
+                workflow, definition
+            )
             effective = await get_effective_ai_model_configuration_for_workflow(
                 organization_id=user.selected_organization_id,
                 workflow_configurations=workflow_configurations,
             )
+            if (
+                role == SERVICE_USER_ROLE
+                and not _has_tts_override(workflow_configurations)
+                and resolved_configs.get(SAKINAH_ROLE) is not None
+                and getattr(resolved_configs[SAKINAH_ROLE], "tts", None) is not None
+            ):
+                effective = copy.deepcopy(effective)
+                effective.tts = copy.deepcopy(resolved_configs[SAKINAH_ROLE].tts)
+            resolved_configs[role] = effective
             tts = effective.tts
             logger.info(
                 "Simulation role={} workflow_id={} definition_id={} "
@@ -603,10 +639,11 @@ class SimulationManager:
             if workflow_run is None:
                 raise RuntimeError("Evaluation workflow run is unavailable")
             workflow_configurations = (
-                workflow_run.definition.workflow_configurations
-                if workflow_run.definition
-                else workflow_run.workflow.workflow_configurations
-            ) or {}
+                _simulation_workflow_configurations(
+                    workflow_run.workflow,
+                    workflow_run.definition,
+                )
+            )
             configuration = await get_effective_ai_model_configuration_for_workflow(
                 organization_id=simulation.organization_id,
                 workflow_configurations=workflow_configurations,

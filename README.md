@@ -1,6 +1,6 @@
 # Dograh AI
 
-> **CALMOS Connect / Sakinah v1.47.0.7** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): retains durable in-progress CALM scores and phone-correlated Run Details with database-backed artifact references and short-lived MinIO/S3 replay links. Simulation roles pin their independently resolved configuration at startup, including the Service User's workflow-level TTS voice override. The AWS deployment is served at [`voice.calmos.io`](https://voice.calmos.io). See [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
+> **CALMOS Connect / Sakinah v1.47.0.8** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): restores completed Run Details finalization for new calls, retaining durable in-progress CALM scores and phone-correlated Run Details with database-backed artifact references and short-lived MinIO/S3 replay links. Simulation roles pin their resolved configuration at startup, and the Service User simulator inherits the Sakinah TTS voice when it has no TTS override of its own. The AWS deployment is served at [`voice.calmos.io`](https://voice.calmos.io). See [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
 > **Deployment limitation**: run the API with a **single worker** (`FASTAPI_WORKERS=1`, the default). Simulations keep in-process state, so with multiple workers the simulation status/stop endpoints and the transcript/audio WebSockets intermittently land on a worker that doesn't own the simulation ([#4](https://github.com/applied-biosciences/dograh/issues/4)).
 
 <p align="center">
@@ -11,7 +11,7 @@
 
 **The open-source, self-hostable alternative to Vapi & Retell** — build production voice agents with a visual workflow builder, test them in minutes, and let AI coding assistants help design and edit them through MCP.
 
-> **Sakinah distribution:** this checkout packages the compatible `v1.47.0.7` release, based on upstream Dograh `dograh-v1.47.0`. Production images must be built for `linux/amd64`; deployment and local smoke-test instructions are maintained in the accompanying Sakinah deployment bundle.
+> **Sakinah distribution:** this checkout packages the compatible `v1.47.0.8` release, based on upstream Dograh `dograh-v1.47.0`. Production images must be built for `linux/amd64`; deployment and local smoke-test instructions are maintained in the accompanying Sakinah deployment bundle.
 
 <p align="center">
   <a href="https://app.dograh.com">
@@ -170,10 +170,12 @@ real-time audio → STT → LLM → TTS response path.
   and identifies the unavailable track without exposing storage paths. During
   the caller-identity migration, older rows use a keyed hash of their protected
   SQL caller/destination field until the caller-identifiers row is backfilled.
-- Simulations resolve Sakinah and Service User independently against their own
-  draft definitions (falling back to published when no draft exists). Their V2
-  LLM/TTS settings, including voices, do not mutate or inherit from the
-  organization configuration or each other.
+- Simulations resolve Sakinah and Service User against their own draft
+  definitions (falling back to published when no draft exists). Definition-level
+  V2 settings win; workflow-level settings remain the fallback for seeded
+  simulators. If the Service User simulator has no TTS override, it inherits
+  only Sakinah's resolved TTS voice so the heard service-user flow stays aligned
+  without copying Sakinah's prompt, LLM, or STT configuration.
 
 Administrators can open `/sakinah/scenarios` to bulk-import scenario JSON files
 from a ZIP or from multiple individual files. The importer validates every JSON

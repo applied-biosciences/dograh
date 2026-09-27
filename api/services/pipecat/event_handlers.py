@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 
 from loguru import logger
 
@@ -399,12 +400,23 @@ def register_event_handlers(
             f"Usage metrics: {usage_info}, Gathered context: {gathered_context}"
         )
 
+        ended_at = datetime.now(UTC)
+        duration_seconds = None
+        if workflow_run and workflow_run.started_at:
+            duration_seconds = max(
+                0,
+                (ended_at - workflow_run.started_at).total_seconds(),
+            )
+
         await db_client.update_workflow_run(
             run_id=workflow_run_id,
             usage_info=usage_info,
             gathered_context=gathered_context,
             is_completed=True,
             state=WorkflowRunState.COMPLETED.value,
+            ended_at=ended_at,
+            duration_seconds=duration_seconds,
+            call_status="completed",
             termination_reason=gathered_context.get("termination_reason"),
         )
         await notify_campaign_call_completed(

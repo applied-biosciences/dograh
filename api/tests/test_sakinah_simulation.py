@@ -25,6 +25,8 @@ from api.services.sakinah.simulation import (
     SERVICE_USER_ROLE,
     Simulation,
     SimulationAuthorizationError,
+    _has_tts_override,
+    _simulation_workflow_configurations,
     simulation_manager,
 )
 from api.services.sakinah.workflow import (
@@ -36,6 +38,31 @@ from api.services.sakinah.workflow import (
 )
 
 SCENARIO = "You are Amina, a 34-year-old feeling overwhelmed at work."
+
+
+def test_simulation_uses_workflow_config_when_definition_config_is_empty():
+    workflow = type(
+        "Workflow",
+        (),
+        {"workflow_configurations": {"model_configuration_v2_override": {"x": 1}}},
+    )()
+    definition = type("Definition", (), {"workflow_configurations": {}})()
+
+    assert _simulation_workflow_configurations(workflow, definition) == {
+        "model_configuration_v2_override": {"x": 1}
+    }
+
+
+def test_tts_override_detection_supports_v2_and_legacy_shapes():
+    assert _has_tts_override(
+        {
+            "model_configuration_v2_override": {
+                "byok": {"pipeline": {"tts": {"voice": "voice-1"}}}
+            }
+        }
+    )
+    assert _has_tts_override({"model_overrides": {"tts": {"voice": "voice-2"}}})
+    assert not _has_tts_override({"model_overrides": {"llm": {"model": "gpt"}}})
 
 
 async def _make_user(db_session, slug: str):
