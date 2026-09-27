@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from api.routes.sakinah import _wait_for_workflow_artifacts
 from api.db.sakinah_persistence_client import _structured_call_scores
+from api.enums import CallType, WorkflowRunMode
 from api.services.sakinah.simulation import SAKINAH_ROLE
 
 
@@ -199,6 +200,8 @@ def test_structured_call_scores_keep_speakers_in_separate_native_runs():
         {
             "turn_id": "sakinah-turn",
             "role": "sakinah",
+            "scoring_method": "unknown",
+            "scored_at": None,
             "scores": {"response_quality.empathy": 8},
             "confidence": {"response_quality.empathy": 7},
             "trend": {},
@@ -206,3 +209,110 @@ def test_structured_call_scores_keep_speakers_in_separate_native_runs():
         }
     ]
     assert caller["turns"][0]["turn_id"] == "caller-turn"
+
+
+async def test_run_details_exposes_paired_score_only_timeline_in_org(
+    test_client_factory, db_session
+):
+    """Either native run can present both simulation roles without transcripts."""
+    owner = await _make_user(db_session, "sakinah_timeline_owner")
+    outsider = await _make_user(db_session, "sakinah_timeline_outsider")
+    sakinah_workflow = await db_session.create_workflow(
+        "Timeline Sakinah", {}, owner.id, owner.selected_organization_id
+    )
+    caller_workflow = await db_session.create_workflow(
+        "Timeline Service User", {}, owner.id, owner.selected_organization_id
+    )
+    sakinah_run = await db_session.create_workflow_run(
+        "Timeline Sakinah run",
+        sakinah_workflow.id,
+        WorkflowRunMode.SMALLWEBRTC.value,
+        owner.id,
+        call_type=CallType.INBOUND,
+        organization_id=owner.selected_organization_id,
+    )
+    caller_run = await db_session.create_workflow_run(
+        "Timeline Service User run",
+        caller_workflow.id,
+        WorkflowRunMode.SMALLWEBRTC.value,
+        owner.id,
+        call_type=CallType.INBOUND,
+        organization_id=owner.selected_organization_id,
+    )
+    session_id = str(uuid.uuid4())
+    await db_session.create_sakinah_run(
+        session_id=session_id,
+        user_id=owner.id,
+        agent_id=sakinah_workflow.id,
+        run_id=sakinah_run.id,
+        service_user_agent_id=caller_workflow.id,
+        service_user_run_id=caller_run.id,
+        scenario="Score timeline fixture",
+        started_at=datetime.now(UTC),
+    )
+    await db_session.update_sakinah_run_progress(
+        user_id=owner.id,
+        session_id=session_id,
+        preview_data={},
+        calm_turns=[
+            {
+                "turn_id": "caller-2",
+                "role": "service_user",
+                "scoring_method": "llm_evaluation",
+                "scored_at": "2026-09-27T10:00:02+00:00",
+                "calm_scores": {"anxiety_fear": 7},
+                "calm_confidence": {"anxiety_fear": 8},
+                "trend": {"anxiety_fear": "worsening"},
+                "utterance_verbatim": "must not reach the details API",
+            },
+            {
+                "turn_id": "sakinah-1",
+                "role": "sakinah",
+                "scoring_method": "llm_evaluation",
+                "scored_at": "2026-09-27T10:00:01+00:00",
+                "calm_scores": {"response_quality.empathy": 9},
+                "calm_confidence": {"response_quality.empathy": 8},
+                "trend": {"response_quality.empathy": "stable"},
+                "prompt_sent_to_llm": "must not reach the details API",
+            },
+            {
+                "turn_id": "caller-1",
+                "role": "service_user",
+                "scoring_method": "rule_based_calm",
+                "scored_at": "2026-09-27T10:00:01+00:00",
+                "calm_scores": {"anxiety_fear": 6},
+                "calm_confidence": {"anxiety_fear": 7},
+            },
+        ],
+    )
+
+    async with test_client_factory(owner) as client:
+        response = await client.get(
+            f"/api/v1/workflow/{caller_workflow.id}/runs/{caller_run.id}"
+        )
+        assert response.status_code == 200, response.text
+        timeline = response.json()["calm_score_timeline"]
+        assert timeline["session_id"] == session_id
+        assert [role["role"] for role in timeline["roles"]] == [
+            "sakinah",
+            "service_user",
+        ]
+        caller_turns = timeline["roles"][1]["turns"]
+        assert [turn["turn_id"] for turn in caller_turns] == ["caller-1", "caller-2"]
+        assert [turn["turn_index"] for turn in caller_turns] == [1, 2]
+        assert caller_turns[0]["scores"] == {"anxiety_fear": 6}
+        assert "utterance_verbatim" not in response.text
+        assert "prompt_sent_to_llm" not in response.text
+
+        # A run ID is not sufficient to bypass either org or workflow scoping.
+        wrong_workflow = await client.get(
+            f"/api/v1/workflow/{sakinah_workflow.id}/runs/{caller_run.id}"
+        )
+        assert wrong_workflow.status_code == 404
+
+    async with test_client_factory(outsider) as client:
+        assert (
+            await client.get(
+                f"/api/v1/workflow/{caller_workflow.id}/runs/{caller_run.id}"
+            )
+        ).status_code == 404

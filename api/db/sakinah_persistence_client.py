@@ -60,6 +60,8 @@ def _structured_call_scores(
             {
                 "turn_id": turn_id,
                 "role": turn_role,
+                "scoring_method": turn.get("scoring_method") or "unknown",
+                "scored_at": turn.get("scored_at"),
                 "scores": turn.get("calm_scores") or {},
                 "confidence": turn.get("calm_confidence") or {},
                 "trend": turn.get("trend") or {},
@@ -81,6 +83,51 @@ def _structured_call_scores(
             }
         )
     return {"turns": calm}, {"turns": safety}, {"turns": clinical}
+
+
+def _timeline_turns(call_score: CallScoreModel | None) -> list[dict[str, Any]]:
+    """Return a presentation-safe, chronologically stable score timeline.
+
+    ``CallScoreModel`` is intentionally score-only.  Do not add utterances,
+    prompts, evidence spans, or free-text clinical summaries to this response:
+    the Run Details endpoint must remain safe to display and cache in the
+    authenticated dashboard.
+    """
+    if call_score is None or not isinstance(call_score.calm_score, dict):
+        return []
+    raw_turns = call_score.calm_score.get("turns") or []
+    if not isinstance(raw_turns, list):
+        return []
+
+    turns: list[dict[str, Any]] = []
+    for position, raw_turn in enumerate(raw_turns):
+        if not isinstance(raw_turn, dict):
+            continue
+        scores = raw_turn.get("scores") or raw_turn.get("calm_scores") or {}
+        confidence = raw_turn.get("confidence") or raw_turn.get("calm_confidence") or {}
+        if not isinstance(scores, dict) or not isinstance(confidence, dict):
+            continue
+        turns.append(
+            {
+                "turn_id": raw_turn.get("turn_id"),
+                "role": raw_turn.get("role"),
+                "scoring_method": raw_turn.get("scoring_method") or "unknown",
+                "scored_at": raw_turn.get("scored_at"),
+                "scores": scores,
+                "confidence": confidence,
+                "trend": raw_turn.get("trend") or {},
+                "significant_changes": raw_turn.get("significant_changes") or {},
+                "_position": position,
+            }
+        )
+
+    # ISO-8601 strings sort chronologically.  Preserve write order for older
+    # snapshots that predate scored_at, and number only after ordering.
+    turns.sort(key=lambda item: (item.get("scored_at") or "", item["_position"]))
+    for index, turn in enumerate(turns, start=1):
+        turn["turn_index"] = index
+        turn.pop("_position", None)
+    return turns
 
 
 async def _upsert_role_call_scores(
@@ -142,6 +189,83 @@ def _scenario_dict(scenario: SakinahScenarioModel) -> dict[str, Any]:
 
 
 class SakinahPersistenceClient(BaseDBClient):
+    async def get_paired_calm_score_timeline(
+        self,
+        *,
+        workflow_run_id: int,
+        organization_id: int,
+    ) -> dict[str, Any] | None:
+        """Fetch both simulation roles' score-only timelines for Run Details.
+
+        The requested run has already been organization-authorized by the
+        caller.  We scope the paired run again here so a malformed historical
+        Sakinah row can never bridge an organization boundary.
+        """
+        async with self.async_session() as session:
+            simulation = (
+                await session.execute(
+                    select(SakinahRunModel).where(
+                        or_(
+                            SakinahRunModel.run_id == workflow_run_id,
+                            SakinahRunModel.service_user_run_id == workflow_run_id,
+                        )
+                    )
+                )
+            ).scalars().first()
+            if simulation is None:
+                return None
+
+            role_run_ids = {
+                SAKINAH_ROLE: simulation.run_id,
+                SERVICE_USER_ROLE: simulation.service_user_run_id,
+            }
+            requested_ids = [run_id for run_id in role_run_ids.values() if run_id]
+            if not requested_ids:
+                return None
+            authorized_rows = (
+                await session.execute(
+                    select(WorkflowRunModel.id, WorkflowRunModel.workflow_id)
+                    .join(WorkflowModel)
+                    .where(
+                        WorkflowRunModel.id.in_(requested_ids),
+                        WorkflowModel.organization_id == organization_id,
+                    )
+                )
+            ).all()
+            authorized_workflows = {
+                row.id: row.workflow_id for row in authorized_rows
+            }
+            if workflow_run_id not in authorized_workflows:
+                return None
+
+            score_rows = (
+                await session.execute(
+                    select(CallScoreModel).where(
+                        CallScoreModel.agent_run_id.in_(authorized_workflows)
+                    )
+                )
+            ).scalars().all()
+            scores_by_run = {score.agent_run_id: score for score in score_rows}
+
+            roles = []
+            for role in (SAKINAH_ROLE, SERVICE_USER_ROLE):
+                run_id = role_run_ids[role]
+                if run_id not in authorized_workflows:
+                    continue
+                roles.append(
+                    {
+                        "role": role,
+                        "run_id": run_id,
+                        "workflow_id": authorized_workflows[run_id],
+                        "turns": _timeline_turns(scores_by_run.get(run_id)),
+                    }
+                )
+            return {
+                "session_id": simulation.session_id,
+                "status": simulation.status,
+                "roles": roles,
+            }
+
     async def update_sakinah_run_progress(
         self,
         *,

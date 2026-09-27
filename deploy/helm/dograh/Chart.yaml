@@ -10,7 +10,7 @@ type: application
 # version: chart version. Bump for any chart change.
 # appVersion: Dograh application version. Tracks the image tag.
 version: 0.1.0
-appVersion: "1.47.0.11"
+appVersion: "1.47.0.12"
 
 kubeVersion: ">=1.28.0-0"
 

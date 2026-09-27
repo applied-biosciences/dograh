@@ -1,5 +1,20 @@
 # Changelog
 
+## Sakinah v1.47.0.12 (2026-09-27)
+
+- Added an organization-scoped paired-role CALM timeline to the bottom of the
+  native Run Details summary. It resolves either Sakinah or Service User run
+  to the same simulation pair and displays chronological turn index, scoring
+  source, timestamp, dimension score, confidence, and available trend.
+- Retained ongoing persistence on both native workflow runs: PostgreSQL is the
+  queryable source of truth, with immutable score-only snapshots written to
+  MinIO and queued for the configured AWS S3 secondary replica. The details
+  API intentionally excludes prompts, utterances, evidence text, and secrets.
+- Enforced the route's workflow-id match as well as organization scoping before
+  returning Run Details or a paired timeline.
+- Bumped application, UI package/lockfile, Helm app, and release metadata to
+  `v1.47.0.12`.
+
 ## Sakinah v1.47.0.11 (2026-09-27)
 
 - Raised the bounded per-turn evaluator output budget and timeout so complete

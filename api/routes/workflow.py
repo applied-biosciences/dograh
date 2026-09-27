@@ -1454,7 +1454,7 @@ async def get_workflow_run(
     run = await db_client.get_workflow_run(
         run_id, organization_id=user.selected_organization_id
     )
-    if not run:
+    if not run or run.workflow_id != workflow_id:
         raise HTTPException(status_code=404, detail="Workflow run not found")
 
     # Older and partially migrated runs may have recording metadata rows even
@@ -1483,6 +1483,11 @@ async def get_workflow_run(
         or has_bot_recording
     ) and not public_access_token:
         public_access_token = await db_client.ensure_public_access_token(run.id)
+
+    calm_score_timeline = await db_client.get_paired_calm_score_timeline(
+        workflow_run_id=run.id,
+        organization_id=user.selected_organization_id,
+    )
 
     return {
         "id": run.id,
@@ -1541,6 +1546,7 @@ async def get_workflow_run(
         "transcript_object_key": run.transcript_object_key,
         "latency_metrics": run.latency_metrics,
         "termination_reason": run.termination_reason,
+        "calm_score_timeline": calm_score_timeline,
     }
 
 

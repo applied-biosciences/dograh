@@ -41,6 +41,8 @@ import { formatDateTime } from '@/lib/dateTime';
 import { downloadFile, downloadTextFile, getSignedUrl } from '@/lib/files';
 import { cn } from '@/lib/utils';
 
+import { CalmScoreTimelineSection, type CalmScoreTimeline } from './components/CalmScoreTimeline';
+
 type StorageStatus = 'verified' | 'missing' | 'pending' | 'not_expected' | 'not_configured' | 'unknown';
 
 interface StorageAudit {
@@ -82,6 +84,7 @@ interface WorkflowRunResponse {
     gathered_context: Record<string, string | number | boolean | object> | null;
     logs: WorkflowRunLogs | null;
     annotations: Record<string, unknown> | null;
+    calm_score_timeline: CalmScoreTimeline | null;
 }
 
 const RUN_SHELL_HEIGHT_CLASS = "h-[calc(100svh-49px)] min-h-[calc(100svh-49px)] max-h-[calc(100svh-49px)]";
@@ -760,6 +763,7 @@ export default function WorkflowRunPage() {
                 setStorageAudit((auditResponse.data as StorageAudit | undefined) ?? null);
 
                 setWorkflowName(workflowResponse.data?.name ?? null);
+                const responseData = runResponse.data as (typeof runResponse.data & { calm_score_timeline?: CalmScoreTimeline }) | undefined;
                 const runData = {
                     call_id: runResponse.data?.call_id ?? null,
                     mode: runResponse.data?.mode ?? '',
@@ -775,6 +779,7 @@ export default function WorkflowRunPage() {
                     gathered_context: runResponse.data?.gathered_context as Record<string, string> | null ?? null,
                     logs: runResponse.data?.logs as WorkflowRunLogs | null ?? null,
                     annotations: runResponse.data?.annotations as Record<string, unknown> | null ?? null,
+                    calm_score_timeline: responseData?.calm_score_timeline ?? null,
                 };
                 setWorkflowRun(runData);
                 posthog.capture(PostHogEvent.WORKFLOW_RUN_DETAILS_VIEWED, {
@@ -996,6 +1001,10 @@ export default function WorkflowRunPage() {
                                 title="QA Results"
                                 context={workflowRun.annotations as Record<string, string | number | boolean | object>}
                             />
+                        )}
+
+                        {workflowRun?.calm_score_timeline && (
+                            <CalmScoreTimelineSection timeline={workflowRun.calm_score_timeline} />
                         )}
                     </div>
                 </div>
