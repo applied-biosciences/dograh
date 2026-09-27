@@ -1,4 +1,5 @@
 from api.db.agent_trigger_client import AgentTriggerClient
+from api.db.artifact_replication_client import ArtifactReplicationClient
 from api.db.api_key_client import APIKeyClient
 from api.db.campaign_client import CampaignClient
 from api.db.call_persistence_client import CallPersistenceClient
@@ -13,6 +14,7 @@ from api.db.reports_client import ReportsClient
 from api.db.sakinah_persistence_client import SakinahPersistenceClient
 from api.db.telephony_configuration_client import TelephonyConfigurationClient
 from api.db.telephony_phone_number_client import TelephonyPhoneNumberClient
+from api.db.telephony_trunk_client import TelephonyTrunkClient
 from api.db.tool_client import ToolClient
 from api.db.user_client import UserClient
 from api.db.webhook_credential_client import WebhookCredentialClient
@@ -25,6 +27,7 @@ from api.db.workflow_template_client import WorkflowTemplateClient
 
 
 class DBClient(
+    ArtifactReplicationClient,
     WorkflowClient,
     WorkflowRunClient,
     WorkflowRunTextSessionClient,
@@ -46,6 +49,7 @@ class DBClient(
     WorkflowRecordingClient,
     TelephonyConfigurationClient,
     TelephonyPhoneNumberClient,
+    TelephonyTrunkClient,
     FolderClient,
     SakinahPersistenceClient,
     CallPersistenceClient,

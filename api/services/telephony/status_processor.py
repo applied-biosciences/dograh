@@ -12,12 +12,15 @@ from loguru import logger
 from pydantic import BaseModel
 
 from api.db import db_client
+from api.db.workflow_run_client import append_unique_tags
 from api.enums import TelephonyCallStatus, WorkflowRunState
 from api.services.campaign.campaign_call_dispatcher import campaign_call_dispatcher
 from api.services.campaign.campaign_event_publisher import (
-    get_campaign_event_publisher,
+    notify_campaign_call_completed,
 )
+from api.services.campaign.campaign_retry import schedule_campaign_retry
 from api.services.campaign.circuit_breaker import circuit_breaker
+from api.services.workflow.disposition_mapping import map_disposition
 from api.tasks.arq import enqueue_job
 from api.tasks.function_names import FunctionNames
 
@@ -64,15 +67,6 @@ def _duration_seconds(duration: str | None) -> int | float:
         return 0
 
     return int(parsed) if parsed.is_integer() else parsed
-
-
-def _append_unique_tags(existing_tags: object, new_tags: list[str]) -> list[str]:
-    tags = existing_tags if isinstance(existing_tags, list) else []
-    merged = list(tags)
-    for tag in new_tags:
-        if tag not in merged:
-            merged.append(tag)
-    return merged
 
 
 async def _enqueue_integrations_for_unconnected_run(
@@ -178,12 +172,13 @@ async def _process_status_update(workflow_run_id: int, status: StatusCallbackReq
             normalized_status in RETRYABLE_NOT_CONNECTED_STATUSES
             and workflow_run.campaign_id
         ):
-            publisher = await get_campaign_event_publisher()
-            await publisher.publish_retry_needed(
-                workflow_run_id=workflow_run_id,
-                reason=normalized_status.value.replace("-", "_"),
-                campaign_id=workflow_run.campaign_id,
-                queued_run_id=workflow_run.queued_run_id,
+            # Persist the retry before making this run terminal. Completion
+            # checks must never observe an idle campaign while a retry event
+            # is still waiting to create its queue row.
+            await schedule_campaign_retry(
+                workflow_run,
+                normalized_status.value.replace("-", "_"),
+                organization_id=workflow_run.workflow.organization_id,
             )
 
         call_tags = (
@@ -191,7 +186,7 @@ async def _process_status_update(workflow_run_id: int, status: StatusCallbackReq
             if workflow_run.gathered_context
             else []
         )
-        call_tags = _append_unique_tags(
+        call_tags = append_unique_tags(
             call_tags,
             ["not_connected", f"telephony_{normalized_status.value}"],
         )
@@ -199,7 +194,14 @@ async def _process_status_update(workflow_run_id: int, status: StatusCallbackReq
         gathered_context = {
             "call_tags": call_tags,
             "call_disposition": normalized_status.value,
-            "mapped_call_disposition": normalized_status.value,
+            "mapped_call_disposition": await map_disposition(
+                workflow_run.workflow.organization_id, normalized_status.value
+            ),
+            # A call that never connected has no conversation to derive an
+            # outcome from, so mechanism and disposition are the same value
+            # here. Recorded anyway so `call_status` is populated for every
+            # run and not just the ones that reached the engine.
+            "call_status": normalized_status.value,
         }
         if status.call_id:
             gathered_context["call_id"] = status.call_id
@@ -233,3 +235,9 @@ async def _process_status_update(workflow_run_id: int, status: StatusCallbackReq
         logger.warning(
             f"[run {workflow_run_id}] Unexpected status update: {status.status}"
         )
+
+    if (
+        normalized_status == TelephonyCallStatus.COMPLETED
+        or normalized_status in TERMINAL_NOT_CONNECTED_STATUSES
+    ):
+        await notify_campaign_call_completed(workflow_run.campaign_id, workflow_run_id)

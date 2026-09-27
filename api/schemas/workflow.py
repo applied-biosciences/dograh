@@ -53,3 +53,4 @@ class WorkflowRunResponseSchema(BaseModel):
     recording_size_bytes: int | None = None
     full_transcript: str | None = None
     termination_reason: str | None = None
+    calm_score_timeline: Dict[str, Any] | None = None

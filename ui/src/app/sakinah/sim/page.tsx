@@ -42,6 +42,7 @@ interface SimTurn {
 }
 
 type ExperimentMode = "baseline" | "scores_only" | "scores_and_trends" | "full_calm_prompt";
+type SimulationAudioStatus = "idle" | "connecting" | "connected" | "error";
 
 const ROLE_LABELS: Record<string, string> = {
     sakinah: "SAKINAH",
@@ -49,7 +50,7 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 export default function SakinahSimulationPage() {
-    const { getAccessToken } = useAuth();
+    const { getAccessToken, isAuthenticated, loading: authLoading, redirectToLogin, user } = useAuth();
     const [scenario, setScenario] = useState("");
     const [scenarioId, setScenarioId] = useState<string | null>(null);
     const [scenarioName, setScenarioName] = useState<string | null>(null);
@@ -63,16 +64,24 @@ export default function SakinahSimulationPage() {
     const [experimentMode, setExperimentMode] = useState<ExperimentMode>("full_calm_prompt");
     const [calmAnalysis, setCalmAnalysis] = useState<CalmAnalysis | null>(null);
     const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+    const [audioStatus, setAudioStatus] = useState<SimulationAudioStatus>("idle");
+    const [audioFrameCount, setAudioFrameCount] = useState(0);
     const wsRef = useRef<WebSocket | null>(null);
     const audioWsRef = useRef<WebSocket | null>(null);
     const audioCtxRef = useRef<AudioContext | null>(null);
     const gainRef = useRef<GainNode | null>(null);
+    const audioKeepAliveRef = useRef<AudioScheduledSourceNode | null>(null);
     const nextPlayTimeRef = useRef(0);
     const transcriptRef = useRef<HTMLDivElement | null>(null);
 
     useEffect(() => {
         const scenarioId = new URLSearchParams(window.location.search).get("scenario");
         if (!scenarioId) return;
+        if (authLoading) return;
+        if (!user) {
+            redirectToLogin();
+            return;
+        }
         void listSakinahScenarios()
             .then((savedScenarios) => {
                 const savedScenario = savedScenarios.find((item) => item.id === scenarioId);
@@ -83,7 +92,7 @@ export default function SakinahSimulationPage() {
                 }
             })
             .catch((loadError) => setError(loadError instanceof Error ? loadError.message : "Unable to load scenario."));
-    }, []);
+    }, [authLoading, redirectToLogin, user]);
 
     const isActive =
         simulation !== null &&
@@ -106,10 +115,18 @@ export default function SakinahSimulationPage() {
     const teardownAudio = useCallback(() => {
         audioWsRef.current?.close();
         audioWsRef.current = null;
+        try {
+            audioKeepAliveRef.current?.stop();
+        } catch {
+            // The source may already have stopped during context teardown.
+        }
+        audioKeepAliveRef.current = null;
         void audioCtxRef.current?.close().catch(() => undefined);
         audioCtxRef.current = null;
         gainRef.current = null;
         nextPlayTimeRef.current = 0;
+        setAudioStatus("idle");
+        setAudioFrameCount(0);
     }, []);
 
     useEffect(
@@ -229,16 +246,40 @@ export default function SakinahSimulationPage() {
 
     const SIM_AUDIO_SAMPLE_RATE = 16000;
 
+    const prepareAudioContext = useCallback(() => {
+        if (audioCtxRef.current) return audioCtxRef.current;
+        const AudioContextConstructor =
+            window.AudioContext ??
+            (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioContextConstructor) {
+            throw new Error("This browser does not support Simulation audio playback.");
+        }
+        // Create the context synchronously from the Start button handler. Safari
+        // may otherwise keep a context created after an awaited API request
+        // suspended under its autoplay policy.
+        const ctx = new AudioContextConstructor();
+        const gain = ctx.createGain();
+        gain.connect(ctx.destination);
+        // Keep a silent source alive while the simulation is running. Safari
+        // can suspend an otherwise idle context between the Start gesture and
+        // the first network-delivered audio chunk; a short unlock beep alone
+        // does not reliably prevent that suspension.
+        const unlockGain = ctx.createGain();
+        unlockGain.gain.value = 0;
+        unlockGain.connect(ctx.destination);
+        const keepAlive = ctx.createOscillator();
+        keepAlive.frequency.value = 20;
+        keepAlive.connect(unlockGain);
+        keepAlive.start();
+        audioKeepAliveRef.current = keepAlive;
+        audioCtxRef.current = ctx;
+        gainRef.current = gain;
+        nextPlayTimeRef.current = 0;
+        return ctx;
+    }, []);
+
     const openAudioSocket = useCallback(
-        (simulationId: string, token: string) => {
-            // Must be called from a user gesture (the Start click) so the
-            // browser allows the AudioContext to start.
-            const ctx = new AudioContext();
-            const gain = ctx.createGain();
-            gain.connect(ctx.destination);
-            audioCtxRef.current = ctx;
-            gainRef.current = gain;
-            nextPlayTimeRef.current = 0;
+        (simulationId: string, token: string, ctx: AudioContext) => {
 
             const baseUrl =
                 client.getConfig().baseUrl || resolveBrowserBackendUrl();
@@ -247,32 +288,56 @@ export default function SakinahSimulationPage() {
                 `${wsUrl}/api/v1/sakinah/simulations/${simulationId}/audio?token=${token}`,
             );
             socket.binaryType = "arraybuffer";
-            socket.onmessage = (message) => {
-                const context = audioCtxRef.current;
+            setAudioStatus("connecting");
+            socket.onopen = () => {
+                // The context was unlocked from Start; this is a defensive
+                // resume for browsers that suspend it while the socket opens.
+                if (ctx.state !== "running") void ctx.resume().catch(() => undefined);
+                setAudioStatus("connected");
+            };
+            socket.onerror = () => {
+                setAudioStatus("error");
+            };
+            socket.onmessage = async (message) => {
+                const context = audioCtxRef.current === ctx ? ctx : null;
                 const gainNode = gainRef.current;
                 if (!context || !gainNode) return;
-                const pcm = new Int16Array(message.data as ArrayBuffer);
-                if (pcm.length === 0) return;
-                const samples = new Float32Array(pcm.length);
-                for (let i = 0; i < pcm.length; i += 1) {
-                    samples[i] = pcm[i] / 32768;
+                try {
+                    if (context.state !== "running") {
+                        await context.resume();
+                    }
+                    if (context.state !== "running") {
+                        throw new Error(`AudioContext is ${context.state}`);
+                    }
+                    const bytes = message.data instanceof Blob
+                        ? await message.data.arrayBuffer()
+                        : message.data as ArrayBuffer;
+                    const pcm = new Int16Array(bytes);
+                    if (pcm.length === 0) return;
+                    setAudioFrameCount((count) => count + 1);
+                    const samples = new Float32Array(pcm.length);
+                    for (let i = 0; i < pcm.length; i += 1) {
+                        samples[i] = pcm[i] / 32768;
+                    }
+                    const buffer = context.createBuffer(
+                        1,
+                        samples.length,
+                        SIM_AUDIO_SAMPLE_RATE,
+                    );
+                    buffer.copyToChannel(samples, 0);
+                    const source = context.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(gainNode);
+                    // Schedule chunks back-to-back with a small jitter cushion.
+                    const startAt = Math.max(
+                        context.currentTime + 0.1,
+                        nextPlayTimeRef.current,
+                    );
+                    source.start(startAt);
+                    nextPlayTimeRef.current = startAt + buffer.duration;
+                } catch {
+                    setAudioStatus("error");
                 }
-                const buffer = context.createBuffer(
-                    1,
-                    samples.length,
-                    SIM_AUDIO_SAMPLE_RATE,
-                );
-                buffer.copyToChannel(samples, 0);
-                const source = context.createBufferSource();
-                source.buffer = buffer;
-                source.connect(gainNode);
-                // Schedule chunks back-to-back with a small jitter cushion.
-                const startAt = Math.max(
-                    context.currentTime + 0.1,
-                    nextPlayTimeRef.current,
-                );
-                source.start(startAt);
-                nextPlayTimeRef.current = startAt + buffer.duration;
             };
             audioWsRef.current = socket;
         },
@@ -293,6 +358,18 @@ export default function SakinahSimulationPage() {
         setTurns([]);
         setCalmAnalysis(null);
         try {
+            if (!isAuthenticated) {
+                redirectToLogin();
+                return;
+            }
+            // Resume the context before the first await so browser autoplay
+            // policies, especially Safari's, treat this as the Start gesture.
+            const audioContext = prepareAudioContext();
+            if (audioContext.state !== "running") await audioContext.resume();
+            if (audioContext.state !== "running") {
+                throw new Error(`Browser audio is ${audioContext.state}; allow audio and try again.`);
+            }
+            setAudioFrameCount(0);
             // The SDK's auth interceptor signs the request; the token is only
             // needed for the events WebSocket, which cannot use the interceptor.
             const token = await getAccessToken();
@@ -304,6 +381,13 @@ export default function SakinahSimulationPage() {
                     experiment_mode: experimentMode,
                 },
             });
+            if (response.response?.status === 401) {
+                redirectToLogin();
+                return;
+            }
+            if (response.response?.status === 403) {
+                throw new Error('You are not authorized to start this simulation.');
+            }
             if (response.error || !response.data) {
                 throw new Error(
                     detailFromError(response.error, "Unable to start the simulation."),
@@ -312,8 +396,9 @@ export default function SakinahSimulationPage() {
             const snapshot = response.data;
             setSimulation(snapshot);
             openEventsSocket(snapshot.simulation_id, token);
-            openAudioSocket(snapshot.simulation_id, token);
+            openAudioSocket(snapshot.simulation_id, token, audioContext);
         } catch (startError) {
+            teardownAudio();
             setError(
                 startError instanceof Error
                     ? startError.message
@@ -331,6 +416,13 @@ export default function SakinahSimulationPage() {
             const response = await stopSimulationApiV1SakinahSimulationsSimulationIdStopPost({
                 path: { simulation_id: simulation.simulation_id },
             });
+            if (response.response?.status === 401) {
+                redirectToLogin();
+                return;
+            }
+            if (response.response?.status === 403) {
+                throw new Error('You are not authorized to stop this simulation.');
+            }
             if (response.error || !response.data) {
                 throw new Error(
                     detailFromError(response.error, "Unable to stop the simulation."),
@@ -480,6 +572,12 @@ export default function SakinahSimulationPage() {
                                     {info.workflow_id}, run {info.workflow_run_id}
                                 </p>
                             ))}
+                            {isActive ? (
+                                <p>
+                                    Audio: {audioStatus}
+                                    {audioFrameCount > 0 ? ` (${audioFrameCount} chunks received)` : ""}
+                                </p>
+                            ) : null}
                         </div>
                     ) : null}
                 </section>

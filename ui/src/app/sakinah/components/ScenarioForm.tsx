@@ -11,7 +11,6 @@ interface ScenarioFormProps {
     disabled: boolean;
     starting: boolean;
 }
-
 export function ScenarioForm({
     scenario,
     onScenarioChange,
@@ -49,4 +48,3 @@ export function ScenarioForm({
         </section>
     );
 }
-

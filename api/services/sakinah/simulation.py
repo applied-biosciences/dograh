@@ -7,6 +7,7 @@ pair; transcript events stream to browsers over a per-simulation event feed.
 
 import asyncio
 import uuid
+from collections import deque
 from datetime import UTC, datetime
 from typing import Any, Dict, Optional
 
@@ -46,6 +47,12 @@ MAX_ALLOWED_DURATION_SECONDS = 900
 # Give Sakinah a head start so she greets first and the service user replies.
 SERVICE_USER_START_DELAY_SECONDS = 1.5
 
+# The simulation pipelines start as part of the HTTP start request, while the
+# browser can only open the audio WebSocket after that request returns. Keep a
+# short bounded pre-connect window so startup/network latency cannot discard
+# the opening utterance. This remains in-process and is deliberately small.
+AUDIO_BACKLOG_MAX_CHUNKS = 250
+
 # How long to wait for pipelines to wind down gracefully before cancelling.
 GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 15.0
 
@@ -57,6 +64,85 @@ def _format_simulation_transcript(turns: list[dict[str, Any]]) -> str:
         for turn in turns
         if turn.get("text")
     )
+
+
+def _simulation_workflow_configurations(workflow, definition) -> dict:
+    """Use the pinned definition config, falling back to workflow-level config."""
+    definition_config = (
+        getattr(definition, "workflow_configurations", None) if definition else None
+    )
+    if isinstance(definition_config, dict) and definition_config:
+        return definition_config
+    workflow_config = getattr(workflow, "workflow_configurations", None)
+    return workflow_config if isinstance(workflow_config, dict) else {}
+
+
+def _score_record_from_evaluation(result: Any) -> dict[str, Any]:
+    """Keep only role-labelled numeric evaluation output for durable storage."""
+    payload = result.model_dump(mode="json")
+    role = payload.get("role")
+    score_fields = (
+        ("state", "safety")
+        if role == SERVICE_USER_ROLE
+        else ("response_quality", "safety_evaluation")
+    )
+    scores: dict[str, int | float] = {}
+    confidence: dict[str, int | float] = {}
+
+    def collect(value: Any, path: tuple[str, ...] = ()) -> None:
+        if not isinstance(value, dict):
+            return
+        if isinstance(value.get("score"), (int, float)):
+            name = ".".join(path)
+            scores[name] = value["score"]
+            if isinstance(value.get("confidence"), (int, float)):
+                confidence[name] = value["confidence"]
+            return
+        for key, child in value.items():
+            collect(child, (*path, str(key)))
+
+    for field in score_fields:
+        collect(payload.get(field), (field,))
+    return {
+        "role": role,
+        "turn_id": payload.get("turn_id"),
+        "scoring_method": "llm_evaluation",
+        "calm_scores": scores,
+        "calm_confidence": confidence,
+        "trend": payload.get("trend") or {},
+        "scored_at": payload.get("evaluated_at") or datetime.now(UTC).isoformat(),
+    }
+
+
+def _score_record_from_calm_turn(turn: dict[str, Any]) -> dict[str, Any]:
+    """Project caller CALM values to score-only fields, excluding transcript text."""
+    raw_trend = turn.get("trend") or {}
+    parameters = raw_trend.get("parameters") or {}
+    trend = {
+        "parameters": {
+            name: {
+                key: value.get(key)
+                for key in (
+                    "current_score",
+                    "previous_score",
+                    "delta_previous",
+                    "direction",
+                )
+                if key in value
+            }
+            for name, value in parameters.items()
+            if isinstance(value, dict)
+        }
+    }
+    return {
+        "role": SERVICE_USER_ROLE,
+        "turn_id": turn.get("turn_id"),
+        "scoring_method": "rule_based_calm",
+        "calm_scores": turn.get("calm_scores") or {},
+        "calm_confidence": turn.get("calm_confidence") or {},
+        "trend": trend,
+        "scored_at": datetime.now(UTC).isoformat(),
+    }
 
 
 class SimulationAuthorizationError(Exception):
@@ -72,11 +158,25 @@ class SimulationAgent:
         workflow_id: int,
         workflow_run_id: int,
         transport: InternalTransport,
+        resolved_user_config: Any | None = None,
+        definition_id: int | None = None,
+        resolved_tts: dict[str, Any] | None = None,
+        initial_context: dict[str, Any] | None = None,
     ):
         self.role = role
         self.workflow_id = workflow_id
         self.workflow_run_id = workflow_run_id
         self.transport = transport
+        # Pin the role's resolved configuration for the lifetime of this run.
+        # This prevents a Service User voice override being replaced by the
+        # organization default during asynchronous pipeline startup.
+        self.resolved_user_config = resolved_user_config
+        self.definition_id = definition_id
+        # Diagnostics deliberately contain only non-secret TTS selection
+        # fields. This lets an operator verify which per-role voice actually
+        # started without exposing provider credentials.
+        self.resolved_tts = resolved_tts or {}
+        self.initial_context = initial_context or {}
         self.pipeline_task: Optional[asyncio.Task] = None
 
 
@@ -111,10 +211,14 @@ class Simulation:
         self.events: list[dict] = []
         self.subscribers: set[asyncio.Queue] = set()
         # Listeners for the live conversation audio (raw 16 kHz mono s16le
-        # PCM chunks). Only live audio is streamed; there is no backlog.
+        # PCM chunks). A bounded recent backlog bridges the HTTP response ->
+        # WebSocket connection gap without turning this into durable storage.
         self.audio_subscribers: set[asyncio.Queue] = set()
+        self.audio_backlog: deque[bytes] = deque(maxlen=AUDIO_BACKLOG_MAX_CHUNKS)
         self.watchdog_task: Optional[asyncio.Task] = None
         self.completed_turns: list[dict] = []
+        self.calm_score_turns: list[dict[str, Any]] = []
+        self._calm_persistence_lock = asyncio.Lock()
         self.active_turns: dict[str, dict] = {}
         self.evaluation_tasks: set[asyncio.Task] = set()
         self.evaluator: CalmEvaluator | None = None
@@ -171,16 +275,20 @@ class Simulation:
             "ended_at": self.ended_at.isoformat() if self.ended_at else None,
             "turn_count": self.turn_count,
             "experiment_mode": self.experiment_mode,
-            "calm_scores": self.calm_runtime.turns[-1]["calm_scores"]
-            if self.calm_runtime.turns
-            else {},
-            "calm_trend": self.calm_runtime.turns[-1]["trend"]
-            if self.calm_runtime.turns
-            else {},
+            "calm_scores": (
+                self.calm_runtime.turns[-1]["calm_scores"]
+                if self.calm_runtime.turns
+                else {}
+            ),
+            "calm_trend": (
+                self.calm_runtime.turns[-1]["trend"] if self.calm_runtime.turns else {}
+            ),
             "agents": {
                 role: {
                     "workflow_id": agent.workflow_id,
                     "workflow_run_id": agent.workflow_run_id,
+                    "definition_id": agent.definition_id,
+                    "resolved_tts": agent.resolved_tts,
                 }
                 for role, agent in self.agents.items()
             },
@@ -216,6 +324,9 @@ class Simulation:
 
     def publish_audio(self, pcm: bytes) -> None:
         """Fan live PCM out to audio listeners; drop chunks on slow consumers."""
+        if not pcm:
+            return
+        self.audio_backlog.append(pcm)
         for queue in list(self.audio_subscribers):
             try:
                 queue.put_nowait(pcm)
@@ -223,9 +334,14 @@ class Simulation:
                 pass
 
     def subscribe_audio(self) -> asyncio.Queue:
-        # ~250 chunks x 40 ms = 10 s of buffering before we drop.
-        queue: asyncio.Queue = asyncio.Queue(maxsize=250)
+        # ~250 chunks x 40 ms = 10 s of bounded startup/reconnect buffering.
+        queue: asyncio.Queue = asyncio.Queue(maxsize=AUDIO_BACKLOG_MAX_CHUNKS)
         self.audio_subscribers.add(queue)
+        for chunk in self.audio_backlog:
+            try:
+                queue.put_nowait(chunk)
+            except asyncio.QueueFull:
+                break
         return queue
 
     def unsubscribe_audio(self, queue: asyncio.Queue) -> None:
@@ -322,7 +438,13 @@ class SimulationManager:
                 # conversation start.
                 initial_context["suppress_initial_greeting"] = True
             run_inputs = await prepare_workflow_run_inputs(
-                db_client, workflow, initial_context=initial_context
+                db_client,
+                workflow,
+                initial_context=initial_context,
+                # Simulation is the same editor test path for both roles.  A
+                # missing draft deliberately falls back to the published run.
+                use_draft=True,
+                include_template_context=True,
             )
             run = await db_client.create_workflow_run(
                 f"Sakinah sim {role} {simulation_id[:8]}",
@@ -332,13 +454,59 @@ class SimulationManager:
                 call_type=CallType.INBOUND,
                 organization_id=user.selected_organization_id,
                 definition_id=run_inputs.definition_id,
+                use_draft=run_inputs.use_draft,
                 initial_context=run_inputs.initial_context,
+            )
+            # This is deliberately configuration metadata only.  It gives an
+            # operator enough evidence to diagnose a role-specific override
+            # without ever serialising credentials or the rest of the config.
+            from api.services.configuration.ai_model_configuration import (
+                get_effective_ai_model_configuration_for_workflow,
+            )
+
+            persisted_run = await db_client.get_workflow_run(
+                run.id, organization_id=user.selected_organization_id
+            )
+            definition = getattr(persisted_run, "definition", None)
+            workflow_configurations = _simulation_workflow_configurations(
+                workflow, definition
+            )
+            effective = await get_effective_ai_model_configuration_for_workflow(
+                organization_id=user.selected_organization_id,
+                workflow_configurations=workflow_configurations,
+            )
+            tts = effective.tts
+            logger.info(
+                "Simulation role={} workflow_id={} definition_id={} "
+                "tts_provider={} tts_model={} tts_voice={}",
+                role,
+                workflow.id,
+                run_inputs.definition_id,
+                getattr(
+                    getattr(tts, "provider", None),
+                    "value",
+                    getattr(tts, "provider", None),
+                ),
+                getattr(tts, "model", None),
+                getattr(tts, "voice", None),
             )
             simulation.agents[role] = SimulationAgent(
                 role=role,
                 workflow_id=workflow.id,
                 workflow_run_id=run.id,
                 transport=transport,
+                resolved_user_config=effective,
+                definition_id=run_inputs.definition_id,
+                resolved_tts={
+                    "provider": getattr(
+                        getattr(tts, "provider", None),
+                        "value",
+                        getattr(tts, "provider", None),
+                    ),
+                    "model": getattr(tts, "model", None),
+                    "voice": getattr(tts, "voice", None),
+                },
+                initial_context=run_inputs.initial_context,
             )
 
         # Authorize both runs before any billable runtime starts (mirrors the
@@ -439,9 +607,9 @@ class SimulationManager:
                 latest_utterance,
                 conversation_context=conversation_context,
             )
-            # Analysis is applied only to Sakinah's LLM. The service-user
-            # workflow has its own context and never receives this callback.
-            await engine._update_llm_context(turn["prompt_sent_to_llm"], [])
+            # Publish before persistence so an SQL/MinIO outage cannot suppress
+            # the scoring panel in the live simulation. Persistence failures
+            # are isolated below and never stop the conversation.
             simulation.publish(
                 {
                     "role": SAKINAH_ROLE,
@@ -450,6 +618,19 @@ class SimulationManager:
                     "timestamp": datetime.now(UTC).isoformat(),
                 }
             )
+            # Analysis is applied only to Sakinah's LLM. The service-user
+            # workflow has its own context and never receives this callback.
+            await engine._update_llm_context(turn["prompt_sent_to_llm"], [])
+
+            # A running simulation must not hold CALM state only in process
+            # memory: it is needed by the authorized Run Details view after a
+            # reconnect or worker restart. Store structured scores only, not
+            # the prompt/transcript that produced them. Each destination is
+            # best-effort and independent so one failing store cannot suppress
+            # the others or the UI event above.
+            score_turn = _score_record_from_calm_turn(turn)
+            simulation.calm_score_turns.append(score_turn)
+            await self._persist_role_score_turn(simulation, score_turn)
 
         return prepare_prompt
 
@@ -517,33 +698,22 @@ class SimulationManager:
             if simulation._evaluation_llm is not None:
                 return simulation._evaluation_llm
 
-            from api.services.configuration.ai_model_configuration import (
-                get_effective_ai_model_configuration_for_workflow,
-            )
             from api.services.managed_model_services import get_mps_correlation_id
             from api.services.pipecat.service_factory import create_llm_service
 
             agent = simulation.agents[SAKINAH_ROLE]
-            workflow_run = await db_client.get_workflow_run(
-                agent.workflow_run_id,
-                organization_id=simulation.organization_id,
-            )
-            if workflow_run is None:
-                raise RuntimeError("Evaluation workflow run is unavailable")
-            workflow_configurations = (
-                workflow_run.definition.workflow_configurations
-                if workflow_run.definition
-                else workflow_run.workflow.workflow_configurations
-            ) or {}
-            configuration = await get_effective_ai_model_configuration_for_workflow(
-                organization_id=simulation.organization_id,
-                workflow_configurations=workflow_configurations,
-            )
+            # The run returned by db_client is detached after its session
+            # closes. Resolve evaluation from the already-pinned configuration
+            # instead of lazy-loading workflow/definition relationships from
+            # this background task.
+            configuration = agent.resolved_user_config
+            if configuration is None:
+                raise RuntimeError("Pinned Sakinah model configuration is unavailable")
             if configuration.llm is None:
                 raise RuntimeError("No text LLM is configured for evaluation")
             simulation._evaluation_llm = create_llm_service(
                 configuration,
-                correlation_id=get_mps_correlation_id(workflow_run.initial_context),
+                correlation_id=get_mps_correlation_id(agent.initial_context),
                 usage_context="calm_evaluation",
             )
             return simulation._evaluation_llm
@@ -622,6 +792,57 @@ class SimulationManager:
                 "timestamp": datetime.now(UTC).isoformat(),
             }
         )
+        if payload["status"] == "completed" and payload["result"] is not None:
+            score_turn = _score_record_from_evaluation(result)
+            simulation.calm_score_turns.append(score_turn)
+            await self._persist_role_score_turn(simulation, score_turn)
+
+    async def _persist_role_score_turn(
+        self, simulation: Simulation, score_turn: dict[str, Any]
+    ) -> None:
+        """Persist each role's score in Postgres and its own run artifacts."""
+        role = score_turn.get("role")
+        agent = simulation.agents.get(role)
+        if agent is None or simulation.user_id is None:
+            return
+        role_turns = [
+            turn for turn in simulation.calm_score_turns if turn.get("role") == role
+        ]
+        async with simulation._calm_persistence_lock:
+            try:
+                await db_client.update_sakinah_run_progress(
+                    user_id=simulation.user_id,
+                    session_id=simulation.id,
+                    calm_turns=simulation.calm_score_turns,
+                    preview_data={
+                        "calm_scores": simulation.snapshot()["calm_scores"],
+                        "calm_trend": simulation.snapshot()["calm_trend"],
+                    },
+                )
+            except Exception as exc:
+                logger.warning(
+                    "CALM database snapshot failed for simulation {} role={} ({})",
+                    simulation.id,
+                    role,
+                    type(exc).__name__,
+                )
+            try:
+                from api.services.workflow_run_artifacts import (
+                    persist_calm_score_snapshot,
+                )
+
+                await persist_calm_score_snapshot(
+                    agent.workflow_run_id,
+                    role_turns,
+                    role=role,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "CALM object snapshot failed for simulation {} role={} ({})",
+                    simulation.id,
+                    role,
+                    type(exc).__name__,
+                )
 
     async def _run_agent(
         self,
@@ -661,6 +882,7 @@ class SimulationManager:
                 audio_config=audio_config,
                 user_provider_id=str(user.provider_id),
                 organization_id=simulation.organization_id,
+                resolved_user_config=agent.resolved_user_config,
                 calm_prompt_callback=(
                     self._make_calm_prompt_callback(simulation)
                     if agent.role == SAKINAH_ROLE
@@ -794,7 +1016,7 @@ class SimulationManager:
             return
         simulation._finalized = True
         simulation.ended_at = datetime.now(UTC)
-        simulation.status = "failed" if simulation.error else "completed"
+        final_status = "failed" if simulation.error else "completed"
 
         if simulation.evaluation_tasks:
             await asyncio.gather(
@@ -851,7 +1073,7 @@ class SimulationManager:
                 await db_client.complete_sakinah_run(
                     user_id=simulation.user_id,
                     session_id=simulation.id,
-                    status=simulation.status,
+                    status=final_status,
                     ended_at=simulation.ended_at,
                     transcript=_format_simulation_transcript(turns),
                     conversation=turns,
@@ -864,7 +1086,7 @@ class SimulationManager:
                     recording_url=primary_artifacts.get("recording_url"),
                     transcript_url=primary_artifacts.get("transcript_url"),
                     recording_file_reference=artifact_references,
-                    calm_turns=simulation.calm_runtime.turns,
+                    calm_turns=simulation.calm_score_turns,
                     timings={
                         "duration_ms": (
                             simulation.ended_at - simulation.started_at
@@ -881,7 +1103,16 @@ class SimulationManager:
                 queue.put_nowait(None)
             except asyncio.QueueFull:
                 pass
+        # Finalized simulations remain addressable for their terminal status,
+        # but no late audio connection can usefully consume live PCM. Release
+        # the bounded startup buffer rather than retaining audio in the
+        # process for the lifetime of the in-memory simulation record.
+        simulation.audio_backlog.clear()
 
+        # Publish a terminal state only after persistence and artifact
+        # reconciliation finish. Consumers use this transition as the signal
+        # that finalization is complete.
+        simulation.status = final_status
         simulation.publish_status()
         logger.info(
             f"Simulation {simulation.id} finalized: status={simulation.status} "

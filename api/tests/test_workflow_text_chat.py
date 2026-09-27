@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from pipecat.processors.aggregators.llm_context import LLMSpecificMessage
+from pipecat.utils.enums import EndTaskReason
 
 from api.db.models import OrganizationModel, UserModel, organization_users_association
 from api.enums import OrganizationConfigurationKey
@@ -272,7 +273,11 @@ async def test_text_chat_session_creation_executes_initial_assistant_turn(
     draft = await db_session.save_workflow_draft(
         workflow_id=workflow.id,
         workflow_definition=workflow_definition,
-        template_context_variables={"name": "draft", "draft_only": "kept"},
+        template_context_variables={
+            "name": "draft",
+            "draft_only": "kept",
+            "workflow_run_id": "stale-run-id",
+        },
     )
 
     llm = MockLLMService(
@@ -322,6 +327,7 @@ async def test_text_chat_session_creation_executes_initial_assistant_turn(
     assert workflow_run.initial_context == {
         "name": "explicit",
         "draft_only": "kept",
+        "workflow_run_id": workflow_run.id,
         "runtime_configuration": {
             "llm_provider": "openai",
             "llm_model": "gpt-4.1",
@@ -353,7 +359,7 @@ async def test_text_chat_pre_call_fetch_hydrates_initial_context_once(
                     "add_global_prompt": False,
                     "greeting_type": "text",
                     "greeting": "Welcome {{customer_name}} ({{account_tier}}).",
-                    "pre_call_fetch_enabled": True,
+                    "pre_call_fetch_mode": "always",
                     "pre_call_fetch_url": "https://example.com/customer",
                     "pre_call_fetch_credential_uuid": "credential-uuid",
                 },
@@ -389,6 +395,7 @@ async def test_text_chat_pre_call_fetch_hydrates_initial_context_once(
     )
     pre_call_fetch = AsyncMock(
         return_value={
+            "workflow_run_id": "fetched-run-id",
             "customer_name": "Fetched",
             "account_tier": "gold",
             "runtime_configuration": {
@@ -429,6 +436,7 @@ async def test_text_chat_pre_call_fetch_hydrates_initial_context_once(
                 f"/api/v1/workflow/{workflow.id}/text-chat/sessions",
                 json={
                     "initial_context": {
+                        "workflow_run_id": "external-run-id",
                         "customer_name": "Explicit",
                         "page_url": "https://dograh.com/pricing",
                     }
@@ -461,6 +469,10 @@ async def test_text_chat_pre_call_fetch_hydrates_initial_context_once(
     assert fetch_kwargs["credential_uuid"] == "credential-uuid"
     assert fetch_kwargs["workflow_id"] == workflow.id
     assert fetch_kwargs["organization_id"] == user.selected_organization_id
+    assert (
+        fetch_kwargs["call_context_vars"]["workflow_run_id"]
+        == created["workflow_run_id"]
+    )
     assert fetch_kwargs["call_context_vars"]["customer_name"] == "Explicit"
     assert fetch_kwargs["call_context_vars"]["page_url"] == "https://dograh.com/pricing"
     assert fetch_kwargs["call_context_vars"]["runtime_configuration"] == {
@@ -474,6 +486,7 @@ async def test_text_chat_pre_call_fetch_hydrates_initial_context_once(
     workflow_run = await db_session.get_workflow_run_by_id(created["workflow_run_id"])
     assert workflow_run is not None
     assert workflow_run.initial_context == {
+        "workflow_run_id": workflow_run.id,
         "customer_name": "Fetched",
         "account_tier": "gold",
         "page_url": "https://dograh.com/pricing",
@@ -910,7 +923,10 @@ async def test_text_chat_end_transition_persists_synchronous_variable_extraction
     assert run_payload["gathered_context"]["extracted_variables"] == {
         "customer_age": "45"
     }
-    assert run_payload["gathered_context"]["call_disposition"] == "user_qualified"
+    assert (
+        run_payload["gathered_context"]["call_disposition"]
+        == EndTaskReason.END_CALL.value
+    )
     enqueue.assert_awaited_once_with(
         FunctionNames.PROCESS_WORKFLOW_COMPLETION,
         session["workflow_run_id"],

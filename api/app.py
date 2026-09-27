@@ -3,6 +3,7 @@
 import sentry_sdk
 
 from api.constants import (
+    APP_VERSION,
     CORS_ALLOWED_ORIGINS,
     DEPLOYMENT_MODE,
     ENABLE_TELEMETRY,
@@ -70,11 +71,14 @@ async def lifespan(app: FastAPI):
         await sync_manager.start()
         set_worker_sync_manager(sync_manager)
 
+        from api.services.observability import loop_exceptions, loop_lag
+
         # Event-loop lag gauge — per-pod saturation signal read off
         # /health/active-calls during autoscaling load tests.
-        from api.services.observability import loop_lag
-
         loop_lag.start()
+        # Routes exceptions that escape tasks and timer callbacks; demotes one
+        # known aioice teardown race and leaves everything else at ERROR.
+        loop_exceptions.install()
 
         yield  # Run app
 
@@ -87,7 +91,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Dograh API",
     description="API for the Dograh app",
-    version="1.0.0",
+    version=APP_VERSION,
     openapi_url=f"{API_PREFIX}/openapi.json",
     lifespan=lifespan,
     servers=[

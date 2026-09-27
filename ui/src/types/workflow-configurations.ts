@@ -1,5 +1,6 @@
 import type {
     AmbientNoiseConfigurationDefaults,
+    CallDispositionOption as GeneratedCallDispositionOption,
     OrganizationAiModelConfigurationV2,
     WorkflowConfigurationDefaults as GeneratedWorkflowConfigurationDefaults,
 } from "@/client/types.gen";
@@ -20,7 +21,15 @@ export type AmbientNoiseConfiguration = Omit<
 export type TurnStopStrategy = NonNullable<GeneratedWorkflowConfigurationDefaults["turn_stop_strategy"]>;
 export type TurnStartStrategy = NonNullable<GeneratedWorkflowConfigurationDefaults["turn_start_strategy"]>;
 export const DEFAULT_TURN_START_MIN_WORDS = 3;
-export const DEFAULT_PROVISIONAL_VAD_PAUSE_SECS = 1.5;
+
+// "provisional_vad" was retired. Definitions saved before then still carry it,
+// so map it onto the option the backend now resolves such a value to, rather
+// than handing the select a value it has no entry for.
+function coerceTurnStartStrategy(value: string): TurnStartStrategy {
+    return TURN_START_STRATEGY_OPTIONS.some(o => o.value === value)
+        ? (value as TurnStartStrategy)
+        : 'default';
+}
 
 export const TURN_START_STRATEGY_OPTIONS: Array<{
     value: TurnStartStrategy;
@@ -37,37 +46,62 @@ export const TURN_START_STRATEGY_OPTIONS: Array<{
         label: 'Minimum words',
         description: 'Wait for a minimum number of transcribed words before interrupting bot speech.',
     },
-    {
-        value: 'provisional_vad',
-        label: 'Provisional VAD',
-        description: 'Pause bot audio on voice activity, then confirm the interruption with transcription.',
-    },
 ];
 
-export interface VoicemailDetectionConfiguration {
+export interface AnswerMessage {
+    text?: string;
+    recording_id?: string;
+    recording_pk?: number;
+}
+
+export interface AnswerSupervisorSettings {
+    listening_window_ms?: number;
+    human_utterance_max_ms?: number;
+    machine_utterance_cap_ms?: number;
+    classify_budget_ms?: number;
+    screening_wait_ms?: number;
+    max_screening_rearms?: number;
+    voicemail_action?: 'hangup' | 'leave_message';
+    voicemail_message?: AnswerMessage;
+    screening_message?: AnswerMessage;
+}
+
+export interface VoicemailDetectionConfiguration extends AnswerSupervisorSettings {
     enabled: boolean;
     use_workflow_llm: boolean;
     provider?: string;
     model?: string;
     api_key?: string;
-    system_prompt?: string;
-    long_speech_timeout: number;  // seconds cutoff for long speech detection
 }
 
 export const DEFAULT_VOICEMAIL_DETECTION_CONFIGURATION: VoicemailDetectionConfiguration = {
     enabled: false,
     use_workflow_llm: true,
-    long_speech_timeout: 8.0,
+    voicemail_action: 'hangup',
 };
 
 export interface TranscriptConfiguration {
     include_end_timestamps: boolean;
 }
 
+export interface AvatarConfiguration {
+    enabled: boolean;  // Opt this workflow into the SpatialReal avatar
+    avatar_id?: string | null;  // Override the deployment default avatar
+    mode?: 'sdk' | 'host' | null;  // Override the deployment driving mode
+}
+
+export const DEFAULT_AVATAR_CONFIGURATION: AvatarConfiguration = {
+    enabled: false,
+    avatar_id: null,
+    mode: null,
+};
+
 export interface ExternalPBXFieldMapping {
     context_path: string;
     destination_field: string;
 }
+
+export type CallDispositionOption = GeneratedCallDispositionOption;
 
 export const DEFAULT_TRANSCRIPT_CONFIGURATION: TranscriptConfiguration = {
     include_end_timestamps: false,
@@ -111,10 +145,10 @@ type WorkflowConfigurationBase = Omit<
     | "smart_turn_stop_secs"
     | "turn_start_strategy"
     | "turn_start_min_words"
-    | "provisional_vad_pause_secs"
     | "turn_stop_strategy"
     | "dictionary"
     | "context_compaction_enabled"
+    | "call_dispositions"
     | "text_chat_inactivity_timeout_seconds"
     | "external_pbx_field_mappings"
     | "external_pbx_lead_headers"
@@ -127,12 +161,13 @@ export type WorkflowConfigurations = WorkflowConfigurationBase & {
     smart_turn_stop_secs: number;  // Timeout in seconds for incomplete turn detection
     turn_start_strategy: TurnStartStrategy;  // Strategy for detecting start of user turn/interruption
     turn_start_min_words: number;  // Minimum transcribed words required for minimum-word interruptions
-    provisional_vad_pause_secs: number;  // Seconds to pause bot output while awaiting transcript confirmation
     turn_stop_strategy: TurnStopStrategy;  // Strategy for detecting end of user turn
     dictionary?: string;  // Comma-separated words for voice agent to listen for
     voicemail_detection?: VoicemailDetectionConfiguration;
     transcript_configuration: TranscriptConfiguration;
+    avatar_configuration?: AvatarConfiguration;
     context_compaction_enabled: boolean;  // Summarize context on node transitions to remove stale tool calls
+    call_dispositions: CallDispositionOption[];  // Allowed terminal business outcomes
     text_chat_inactivity_timeout_seconds?: number;  // End inactive text chats after this many seconds
     external_pbx_field_mappings: ExternalPBXFieldMapping[];
     external_pbx_lead_headers: string[];  // Extra lead fields to capture from the inbound INVITE
@@ -151,11 +186,11 @@ const FALLBACK_WORKFLOW_CONFIGURATIONS: WorkflowConfigurations = {
     smart_turn_stop_secs: 2,  // 2 seconds
     turn_start_strategy: 'default',  // Default to platform-chosen user turn start detection
     turn_start_min_words: DEFAULT_TURN_START_MIN_WORDS,
-    provisional_vad_pause_secs: DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
     turn_stop_strategy: 'transcription',  // Default to transcription-based detection
     dictionary: '',
     transcript_configuration: DEFAULT_TRANSCRIPT_CONFIGURATION,
     context_compaction_enabled: false,
+    call_dispositions: [],
     external_pbx_field_mappings: [],
     external_pbx_lead_headers: [],
 };
@@ -185,18 +220,15 @@ export function resolveWorkflowConfigurations(
             configurations?.smart_turn_stop_secs
             ?? defaults?.smart_turn_stop_secs
             ?? FALLBACK_WORKFLOW_CONFIGURATIONS.smart_turn_stop_secs,
-        turn_start_strategy:
+        turn_start_strategy: coerceTurnStartStrategy(
             configurations?.turn_start_strategy
             ?? defaults?.turn_start_strategy
             ?? FALLBACK_WORKFLOW_CONFIGURATIONS.turn_start_strategy,
+        ),
         turn_start_min_words:
             configurations?.turn_start_min_words
             ?? defaults?.turn_start_min_words
             ?? FALLBACK_WORKFLOW_CONFIGURATIONS.turn_start_min_words,
-        provisional_vad_pause_secs:
-            configurations?.provisional_vad_pause_secs
-            ?? defaults?.provisional_vad_pause_secs
-            ?? FALLBACK_WORKFLOW_CONFIGURATIONS.provisional_vad_pause_secs,
         turn_stop_strategy:
             configurations?.turn_stop_strategy
             ?? defaults?.turn_stop_strategy
@@ -209,6 +241,10 @@ export function resolveWorkflowConfigurations(
             configurations?.context_compaction_enabled
             ?? defaults?.context_compaction_enabled
             ?? FALLBACK_WORKFLOW_CONFIGURATIONS.context_compaction_enabled,
+        call_dispositions:
+            configurations?.call_dispositions
+            ?? defaults?.call_dispositions
+            ?? FALLBACK_WORKFLOW_CONFIGURATIONS.call_dispositions,
         text_chat_inactivity_timeout_seconds:
             configurations?.text_chat_inactivity_timeout_seconds
             ?? defaults?.text_chat_inactivity_timeout_seconds,
@@ -226,6 +262,11 @@ export function resolveWorkflowConfigurations(
             ...DEFAULT_TRANSCRIPT_CONFIGURATION,
             ...(defaults?.transcript_configuration as Partial<TranscriptConfiguration> | undefined),
             ...(configurations?.transcript_configuration as Partial<TranscriptConfiguration> | undefined),
+        },
+        avatar_configuration: {
+            ...DEFAULT_AVATAR_CONFIGURATION,
+            ...(defaults?.avatar_configuration as Partial<AvatarConfiguration> | undefined),
+            ...(configurations?.avatar_configuration as Partial<AvatarConfiguration> | undefined),
         },
     };
 }

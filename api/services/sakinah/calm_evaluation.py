@@ -23,7 +23,12 @@ Trend = Literal[
 ]
 
 RECENT_CONTEXT_TURNS = 8
-EVALUATION_TIMEOUT_SECONDS = 20.0
+# A complete strict assessment contains dozens of independently evidenced
+# fields. Four thousand output tokens can truncate valid JSON mid-object,
+# which the UI previously reduced to "Evaluation unavailable". Keep the
+# evaluator bounded, but allow enough time and output budget to finish it.
+EVALUATION_TIMEOUT_SECONDS = 45.0
+EVALUATION_MAX_TOKENS = 8000
 
 
 class StrictModel(BaseModel):
@@ -273,7 +278,7 @@ async def run_llm_inference(
     context.set_messages(messages)
     return await llm.run_inference(
         context,
-        max_tokens=4000,
+        max_tokens=EVALUATION_MAX_TOKENS,
         system_instruction=system_prompt,
     )
 

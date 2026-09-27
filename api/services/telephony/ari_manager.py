@@ -18,6 +18,7 @@ import time
 import uuid
 from typing import Dict, Optional, Set
 from urllib.parse import urlparse
+from weakref import WeakValueDictionary
 
 import aiohttp
 import redis.asyncio as aioredis
@@ -26,7 +27,7 @@ from loguru import logger
 
 from api.constants import REDIS_URL
 from api.db import db_client
-from api.enums import CallType, WorkflowRunMode
+from api.enums import CallType, TelephonyCallStatus, WorkflowRunMode, WorkflowRunState
 from api.errors.failure import (
     DograhFailure,
     ErrorSource,
@@ -43,7 +44,12 @@ from api.services.organization_preferences import external_pbx_integrations_enab
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.telephony import ws_auth
 from api.services.telephony.call_transfer_manager import get_call_transfer_manager
+from api.services.telephony.providers.ari import channel_registry
 from api.services.telephony.providers.ari.external_pbx import create_adapter
+from api.services.telephony.status_processor import (
+    StatusCallbackRequest,
+    _process_status_update,
+)
 from api.services.telephony.transfer_event_protocol import (
     TransferEvent,
     TransferEventType,
@@ -52,10 +58,12 @@ from api.services.workflow.run_creation import prepare_workflow_run_inputs
 from api.services.workflow_run_failure import mark_workflow_run_failed
 
 # Redis key pattern and TTL for channel-to-run mapping
-_CHANNEL_KEY_PREFIX = "ari:channel:"
+# Shared with the originating side, which writes the mapping before the
+# channel can possibly enter Stasis.
+_CHANNEL_KEY_PREFIX = channel_registry.CHANNEL_KEY_PREFIX
 _EXT_CHANNEL_KEY_PREFIX = "ari:ext_channel:"
 _PENDING_BRIDGE_PREFIX = "ari:pending_bridge:"
-_CHANNEL_KEY_TTL = 3600  # 1 hour safety expiry
+_CHANNEL_KEY_TTL = channel_registry.CHANNEL_KEY_TTL
 _PENDING_BRIDGE_TTL = 300  # 5 min safety expiry for bridge-pending state
 
 # Auto-deactivation policy.
@@ -104,12 +112,18 @@ class ARIConnection:
         app_password: str,
         ws_client_name: str = "",
         external_pbx_config: Optional[dict] = None,
+        stasis_app_name: str = "",
     ):
         self.organization_id = organization_id
         self.telephony_configuration_id = telephony_configuration_id
         self.ari_endpoint = ari_endpoint.rstrip("/")
         self.app_name = app_name
         self.app_password = app_password
+        # The ARI username and the Stasis application are separate namespaces in
+        # Asterisk; Dograh generates the latter so no two configurations can
+        # claim the same application. Rows written before the split carry only
+        # app_name and legitimately use it for both.
+        self.stasis_app_name = stasis_app_name or app_name
         self.ws_client_name = ws_client_name
         self.external_pbx_config = external_pbx_config
         self.external_pbx_adapter = create_adapter(external_pbx_config)
@@ -133,6 +147,14 @@ class ARIConnection:
 
         # Transfer manager for handling call transfers
         self._call_transfer_manager = None
+
+        # StasisStart can precede the task that persists external-media state.
+        self._stasis_channels: set[str] = set()
+        # Duplicate destruction events must finish terminal processing serially.
+        # Weak references retire locks once no handler is using or awaiting them.
+        self._destroyed_channel_locks: WeakValueDictionary[str, asyncio.Lock] = (
+            WeakValueDictionary()
+        )
 
     async def _get_redis(self) -> aioredis.Redis:
         """Get Redis client instance (lazy init)."""
@@ -229,7 +251,7 @@ class ARIConnection:
         return (
             f"{ws_scheme}://{parsed.netloc}/ari/events"
             f"?api_key={self.app_name}:{self.app_password}"
-            f"&app={self.app_name}"
+            f"&app={self.stasis_app_name}"
             f"&subscribeAll=true"
         )
 
@@ -473,6 +495,7 @@ class ARIConnection:
         )
 
         if event_type == "StasisStart":
+            self._stasis_channels.add(channel_id)
             if await self._is_ext_channel(channel_id):
                 # External media channel has entered Stasis. If there is a
                 # queued bridge for it, finish bridging now; otherwise the
@@ -566,6 +589,8 @@ class ARIConnection:
             )
 
         elif event_type == "ChannelDestroyed":
+            entered_stasis = channel_id in self._stasis_channels
+            self._stasis_channels.discard(channel_id)
             cause = event.get("cause", 0)
             cause_txt = event.get("cause_txt", "unknown")
             tech_cause = event.get("tech_cause", "unknown")
@@ -585,6 +610,14 @@ class ARIConnection:
                         transfer_id, channel_id, failure_message
                     )
                 )
+            else:
+                # Unanswered calls have no StasisEnd or pipeline completion to
+                # record their outcome. Connected calls retain pipeline outcomes.
+                asyncio.create_task(
+                    self._release_destroyed_channel(
+                        channel_id, cause, cause_txt, entered_stasis=entered_stasis
+                    )
+                )
 
         elif event_type == "ChannelDtmfReceived":
             digit = event.get("digit", "")
@@ -597,6 +630,78 @@ class ARIConnection:
             logger.trace(
                 f"[ARI org={self.organization_id}] Event: {event_type} "
                 f"channel={channel_id}"
+            )
+
+    async def _release_destroyed_channel(
+        self,
+        channel_id: str,
+        cause: int,
+        cause_txt: str,
+        *,
+        entered_stasis: bool = False,
+    ) -> None:
+        """Finalize unconnected calls and release destroyed channels' slots."""
+        lock = self._destroyed_channel_locks.setdefault(channel_id, asyncio.Lock())
+        try:
+            async with lock:
+                workflow_run_id = await self._get_channel_run(channel_id)
+                if not workflow_run_id:
+                    return
+
+                run_id = int(workflow_run_id)
+                run = await db_client.get_workflow_run(
+                    run_id, organization_id=self.organization_id
+                )
+                if not run:
+                    return
+                config_id = (run.initial_context or {}).get(
+                    "telephony_configuration_id"
+                )
+                if run.mode != WorkflowRunMode.ARI.value or config_id not in (
+                    None,
+                    self.telephony_configuration_id,
+                ):
+                    return
+
+                context = run.gathered_context or {}
+                if (
+                    not entered_stasis
+                    and run.call_type == CallType.OUTBOUND.value
+                    and run.state == WorkflowRunState.INITIALIZED.value
+                    and not run.is_completed
+                    and not context.get("ext_channel_id")
+                    and context.get("call_id") in (None, channel_id)
+                ):
+                    status = {
+                        16: TelephonyCallStatus.CANCELED,
+                        17: TelephonyCallStatus.BUSY,
+                        18: TelephonyCallStatus.NO_ANSWER,
+                        19: TelephonyCallStatus.NO_ANSWER,
+                    }.get(cause, TelephonyCallStatus.FAILED)
+                    await _process_status_update(
+                        run_id,
+                        StatusCallbackRequest(
+                            call_id=channel_id,
+                            status=status,
+                            duration="0",
+                            extra={"ari_cause": cause, "ari_cause_txt": cause_txt},
+                        ),
+                    )
+                    logger.info(
+                        f"[ARI org={self.organization_id}] Finalized unconnected "
+                        f"workflow run {run_id}: status={status.value}, "
+                        f"cause={cause} ({cause_txt})"
+                    )
+                else:
+                    await call_concurrency.release_workflow_run_slot(run_id)
+
+                # Keep the mapping if terminal processing fails so a repeated
+                # event can retry it even after the capacity slot was released.
+                await self._delete_channel_run(channel_id)
+        except Exception as e:
+            logger.warning(
+                f"[ARI org={self.organization_id}] Could not finalize destroyed "
+                f"channel {channel_id}: {e}"
             )
 
     async def _ari_request(self, method: str, path: str, **kwargs) -> dict:
@@ -735,7 +840,7 @@ class ARIConnection:
         transport_data = f"v({vparams})"
 
         params = {
-            "app": self.app_name,
+            "app": self.stasis_app_name,
             "external_host": self.ws_client_name,
             "format": "ulaw",
             "transport": "websocket",
@@ -1220,7 +1325,7 @@ class ARIConnection:
             )
 
     async def _delete_bridge(self, bridge_id: str):
-        """Delete an ARI bridge. Ignores 404 (already gone)."""
+        """Delete a bridge, tolerating concurrent cleanup only when it is gone."""
 
         url = f"{self.ari_endpoint}/ari/bridges/{bridge_id}"
         auth = aiohttp.BasicAuth(self.app_name, self.app_password)
@@ -1231,16 +1336,35 @@ class ARIConnection:
                     logger.info(
                         f"[ARI org={self.organization_id}] Deleted bridge {bridge_id}"
                     )
+                    return
                 elif response.status == 404:
                     logger.debug(
                         f"[ARI org={self.organization_id}] Bridge {bridge_id} already gone"
                     )
-                else:
-                    text = await response.text()
-                    logger.error(
-                        f"[ARI org={self.organization_id}] Failed to delete bridge {bridge_id}: "
-                        f"{response.status} {text}"
-                    )
+                    return
+                delete_status = response.status
+                delete_error = await response.text()
+
+            if delete_status == 409:
+                # Another StasisEnd handler may have destroyed the bridge after
+                # ARI looked it up. A 409 can also mean a live bridge belongs to
+                # another application, so confirm absence before accepting it.
+                try:
+                    async with session.get(url, auth=auth) as response:
+                        if response.status == 404:
+                            logger.debug(
+                                f"[ARI org={self.organization_id}] Bridge {bridge_id} "
+                                "already gone after concurrent cleanup (DELETE 409)"
+                            )
+                            return
+                        delete_error += f"; verification GET returned {response.status}"
+                except (aiohttp.ClientError, TimeoutError) as exc:
+                    delete_error += f"; verification GET failed: {exc}"
+
+            logger.error(
+                f"[ARI org={self.organization_id}] Failed to delete bridge {bridge_id}: "
+                f"{delete_status} {delete_error}"
+            )
 
     # ======== CALL TRANSFER HELPER METHODS ========
 
@@ -1443,6 +1567,7 @@ class ARIManager:
             ari_endpoint = config["ari_endpoint"]
             app_name = config["app_name"]
             app_password = config["app_password"]
+            stasis_app_name = config["stasis_app_name"]
             ws_client_name = config["ws_client_name"]
             external_pbx_config = config.get("external_pbx")
 
@@ -1454,6 +1579,7 @@ class ARIManager:
                 app_password,
                 ws_client_name,
                 external_pbx_config,
+                stasis_app_name,
             )
             key = conn.connection_key
 
@@ -1477,6 +1603,7 @@ class ARIManager:
                     existing.ari_endpoint != conn.ari_endpoint
                     or existing.app_name != app_name
                     or existing.app_password != app_password
+                    or existing.stasis_app_name != conn.stasis_app_name
                     or existing.ws_client_name != ws_client_name
                     or existing.external_pbx_config != external_pbx_config
                 ):
@@ -1566,6 +1693,9 @@ class ARIManager:
             ari_endpoint = credentials.get("ari_endpoint")
             app_name = credentials.get("app_name")
             app_password = credentials.get("app_password")
+            # Pre-split rows have no stasis_app_name and keep running on
+            # app_name, which is what their dialplan already routes into.
+            stasis_app_name = credentials.get("stasis_app_name") or app_name
             ws_client_name = credentials.get("ws_client_name", "")
             external_pbx = credentials.get("external_pbx")
             if external_pbx and not await external_pbx_integrations_enabled(
@@ -1619,6 +1749,7 @@ class ARIManager:
                     "ari_endpoint": ari_endpoint,
                     "app_name": app_name,
                     "app_password": app_password,
+                    "stasis_app_name": stasis_app_name,
                     "ws_client_name": ws_client_name,
                     "external_pbx": external_pbx,
                 }

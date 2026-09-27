@@ -57,7 +57,7 @@ services:
       - app-network
 
   minio:
-    image: minio/minio
+    image: quay.io/minio/minio
     container_name: minio
     command: server /data --console-address ":9001"
     environment:
@@ -90,9 +90,6 @@ services:
       MINIO_PUBLIC_ENDPOINT: "${MINIO_PUBLIC_ENDPOINT:-http://localhost:9000}"
       TURN_HOST: "${TURN_HOST:-}"
       TURN_SECRET: "${TURN_SECRET:-}"
-      # Keep at 1: Sakinah simulations hold in-process state, and the
-      # events/audio WebSockets 404 when they land on a different worker
-      # (https://github.com/applied-biosciences/dograh/issues/4).
       FASTAPI_WORKERS: "${FASTAPI_WORKERS:-1}"
     volumes:
       - ./scripts:/workspace/scripts:ro
@@ -166,16 +163,23 @@ services:
       # tunnel's URL at runtime instead (see api/utils/common.py).
       BACKEND_API_ENDPOINT: "${BACKEND_API_ENDPOINT:-}"
 
-      # Database configuration. Local defaults use bundled Postgres; AWS/RDS
-      # deployments can override DATABASE_URL in the Compose .env file.
+      # Database configuration (using containerized postgres)
+      # Defaults to bundled PostgreSQL. Set DATABASE_URL in .env to use an
+      # explicitly provisioned external database (for example AWS RDS).
       DATABASE_URL: "${DATABASE_URL:-postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/postgres}"
 
-      # Redis configuration. Keep the bundled Redis default unless overridden.
-      REDIS_URL: "${REDIS_URL:-redis://:${REDIS_PASSWORD:-redissecret}@redis:6379}"
+      # Redis configuration (using containerized redis)
+      REDIS_URL: "redis://:${REDIS_PASSWORD:-redissecret}@redis:6379"
 
-      # Storage configuration - bundled MinIO by default. Set ENABLE_AWS_S3=true
-      # in .env to make the API use AWS S3 or another S3-compatible server.
+      # Storage configuration - bundled MinIO by default. ENABLE_AWS_S3=true is
+      # the backwards-compatible alias for S3 *primary* storage. To retain
+      # MinIO as primary and asynchronously replicate completed artifacts to
+      # AWS, use ENABLE_AWS_S3_SECONDARY=true and keep both primary switches
+      # false. These flags describe object storage only; DATABASE_URL selects
+      # PostgreSQL separately.
       ENABLE_AWS_S3: "${ENABLE_AWS_S3:-false}"
+      ENABLE_AWS_S3_PRIMARY: "${ENABLE_AWS_S3_PRIMARY:-false}"
+      ENABLE_AWS_S3_SECONDARY: "${ENABLE_AWS_S3_SECONDARY:-false}"
 
       # S3 backend configuration. Compose's .env file is used for interpolation,
       # but those values are not automatically injected into containers, so pass
@@ -183,12 +187,11 @@ services:
       AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
       AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
       AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN:-}"
-      AWS_REGION: "${AWS_REGION:-eu-west-2}"
-      AWS_RECORDINGS_BUCKET: "${AWS_RECORDINGS_BUCKET:-}"
       S3_BUCKET: "${S3_BUCKET:-}"
-      S3_REGION: "${S3_REGION:-eu-west-2}"
-      S3_KMS_KEY_ID: "${S3_KMS_KEY_ID:-}"
-      S3_SERVER_SIDE_ENCRYPTION: "${S3_SERVER_SIDE_ENCRYPTION:-aws:kms}"
+      S3_REGION: "${S3_REGION:-us-east-1}"
+      AWS_RECORDINGS_BUCKET: "${AWS_RECORDINGS_BUCKET:-}"
+      AWS_REGION: "${AWS_REGION:-${S3_REGION:-eu-west-2}}"
+      AWS_S3_PREFIX: "${AWS_S3_PREFIX:-}"
 
       # For a non-AWS S3-compatible server, also set these in Compose's .env
       # S3_ENDPOINT_URL        e.g. https://s3.example.com
@@ -198,12 +201,6 @@ services:
       S3_ENDPOINT_URL: "${S3_ENDPOINT_URL:-}"
       S3_SIGNATURE_VERSION: "${S3_SIGNATURE_VERSION:-}"
       S3_ADDRESSING_STYLE: "${S3_ADDRESSING_STYLE:-}"
-
-      MEMORY_ENABLED: "${MEMORY_ENABLED:-true}"
-      MEMORY_EMBEDDING_MODEL: "${MEMORY_EMBEDDING_MODEL:-text-embedding-3-small}"
-      MEMORY_MAX_RESULTS: "${MEMORY_MAX_RESULTS:-5}"
-      MEMORY_MIN_SIMILARITY: "${MEMORY_MIN_SIMILARITY:-0.72}"
-      RECORD_CALLS: "${RECORD_CALLS:-true}"
 
       # MinIO
       MINIO_ENDPOINT: "minio:9000"
@@ -219,7 +216,6 @@ services:
       # Number of uvicorn worker processes (each is its own process bound to a
       # distinct port starting at 8000). dograh-init renders nginx upstreams
       # from this value and nginx load-balances across them with least_conn.
-      # Keep at 1 until issue #4 (simulation worker-sync) is resolved.
       FASTAPI_WORKERS: "${FASTAPI_WORKERS:-1}"
 
       # Optional singleton background services started by the container CMD
@@ -248,6 +244,11 @@ services:
       # LANGFUSE_PUBLIC_KEY: ""
       # LANGFUSE_HOST: ""
       # LANGFUSE_PROJECT_ID: ""
+      # Traces are private by default. Set to "true" to make traces in the
+      # project above readable by anyone holding the trace URL, with no
+      # Langfuse login. Organizations that connected their own Langfuse project
+      # in the UI carry their own visibility setting instead.
+      LANGFUSE_TRACES_PUBLIC: "${LANGFUSE_TRACES_PUBLIC:-false}"
 
       # TURN server configuration (for WebRTC NAT traversal in remote server)
       # Uses time-limited credentials via TURN REST API (HMAC-SHA1).

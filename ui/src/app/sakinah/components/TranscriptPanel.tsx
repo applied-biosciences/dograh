@@ -5,7 +5,6 @@ import type { TranscriptTurn } from "./types";
 interface TranscriptPanelProps {
     turns: TranscriptTurn[];
 }
-
 export function TranscriptPanel({ turns }: TranscriptPanelProps) {
     return (
         <section className="flex min-h-[28rem] flex-col rounded-xl border bg-card shadow-sm">
@@ -46,4 +45,3 @@ export function TranscriptPanel({ turns }: TranscriptPanelProps) {
         </section>
     );
 }
-

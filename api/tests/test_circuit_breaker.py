@@ -565,7 +565,9 @@ class TestProcessStatusUpdateCircuitBreaker:
     for campaign calls."""
 
     @pytest.mark.asyncio
-    async def test_failure_status_calls_record_and_evaluate(self):
+    async def test_failure_status_calls_record_and_evaluate(
+        self, no_disposition_mapping
+    ):
         """When a campaign call fails, record_and_evaluate should be called
         with is_failure=True."""
 
@@ -594,17 +596,15 @@ class TestProcessStatusUpdateCircuitBreaker:
             ) as mock_dispatcher,
             patch("api.services.telephony.status_processor.circuit_breaker") as mock_cb,
             patch(
-                "api.services.telephony.status_processor.get_campaign_event_publisher"
-            ) as mock_get_publisher,
+                "api.services.telephony.status_processor.notify_campaign_call_completed",
+                new_callable=AsyncMock,
+            ) as mock_notify_completed,
         ):
             mock_db.get_workflow_run_by_id = AsyncMock(return_value=mock_workflow_run)
             mock_db.update_workflow_run = AsyncMock()
 
             mock_dispatcher.release_call_slot = AsyncMock(return_value=True)
             mock_cb.record_and_evaluate = AsyncMock()
-
-            mock_publisher = AsyncMock()
-            mock_get_publisher.return_value = mock_publisher
 
             await _process_status_update(100, status)
 
@@ -614,6 +614,7 @@ class TestProcessStatusUpdateCircuitBreaker:
                 workflow_run_id=100,
                 reason="failed",
             )
+            mock_notify_completed.assert_awaited_once_with(42, 100)
 
     @pytest.mark.asyncio
     async def test_success_status_calls_record_and_evaluate(self):
@@ -643,6 +644,10 @@ class TestProcessStatusUpdateCircuitBreaker:
                 "api.services.telephony.status_processor.campaign_call_dispatcher"
             ) as mock_dispatcher,
             patch("api.services.telephony.status_processor.circuit_breaker") as mock_cb,
+            patch(
+                "api.services.telephony.status_processor.notify_campaign_call_completed",
+                new_callable=AsyncMock,
+            ) as mock_notify_completed,
         ):
             mock_db.get_workflow_run_by_id = AsyncMock(return_value=mock_workflow_run)
             mock_db.update_workflow_run = AsyncMock()
@@ -653,9 +658,12 @@ class TestProcessStatusUpdateCircuitBreaker:
             await _process_status_update(100, status)
 
             mock_cb.record_and_evaluate.assert_called_once_with(42, is_failure=False)
+            mock_notify_completed.assert_awaited_once_with(42, 100)
 
     @pytest.mark.asyncio
-    async def test_non_campaign_call_skips_circuit_breaker(self):
+    async def test_non_campaign_call_skips_circuit_breaker(
+        self, no_disposition_mapping
+    ):
         """Calls without campaign_id should not interact with circuit breaker."""
 
         from api.services.telephony.status_processor import (

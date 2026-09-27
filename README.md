@@ -1,6 +1,6 @@
 # Dograh AI
 
-> **CALMOS Connect white-label v1.45.6** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): this fork adds the Sakinah Scenario Console, AI-to-AI simulation, durable call storage, privacy-controlled memory, and scenario search — see [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.45.6.mdx`](docs/developer/calmos-connect-v1.45.6.mdx).
+> **CALMOS Connect / Sakinah v1.47.0.14** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): ordinary calls now show live, detailed per-turn CALM history in browser Agent Run Tests and native Run Details. Each score compares with its prior turn (`↑`, `=`, or `↓`), and authorized users can download a score-only JSON history containing numeric dimensions, confidence, timestamps, and source—never prompts, utterances, transcripts, API keys, or secrets. PostgreSQL, immutable MinIO snapshots, and configured AWS S3-secondary replication remain the durable score pipeline.
 > **Deployment limitation**: run the API with a **single worker** (`FASTAPI_WORKERS=1`, the default). Simulations keep in-process state, so with multiple workers the simulation status/stop endpoints and the transcript/audio WebSockets intermittently land on a worker that doesn't own the simulation ([#4](https://github.com/applied-biosciences/dograh/issues/4)).
 
 <p align="center">
@@ -11,6 +11,8 @@
 
 **The open-source, self-hostable alternative to Vapi & Retell** — build production voice agents with a visual workflow builder, test them in minutes, and let AI coding assistants help design and edit them through MCP.
 
+> **Sakinah distribution:** this checkout packages the compatible `v1.47.0.14` release, based on upstream Dograh `dograh-v1.47.0`. Production images must be built for `linux/amd64`; deployment and local smoke-test instructions are maintained in the accompanying Sakinah deployment bundle.
+
 <p align="center">
   <a href="https://app.dograh.com">
     <img src="https://img.shields.io/badge/▶_Try_the_Cloud-app.dograh.com-2563eb?style=for-the-badge" alt="Try the Cloud">
@@ -20,7 +22,7 @@
     <img src="https://img.shields.io/badge/⚡_Self--host_in_60s-One_command-111827?style=for-the-badge" alt="Self-host in 60s">
   </a>
   &nbsp;
-  <a href="https://join.slack.com/t/dograh-community/shared_invite/zt-3zjb5vwvl-j7hRz3_F1SOn5cH~jm5f5g">
+  <a href="https://join.slack.com/t/dograh-community/shared_invite/zt-4787daqcn-3TDiQUh~3xrr3pwAqR9wpQ">
     <img src="https://img.shields.io/badge/💬_Join_Slack-Community-4A154B?style=for-the-badge&logo=slack" alt="Join Slack">
   </a>
 </p>
@@ -41,8 +43,14 @@
 - **Maintained by YC alumni and exit founders**, committed to keeping voice AI open
 
 <p align="center">
-  <a href="https://www.producthunt.com/products/dograh?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-dograh-3" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1217382&theme=light&period=daily&t=1786607298379" alt="Dograh - The open source VAPI alternative | Product Hunt" width="250" height="54"></a>
+  <a href="https://www.producthunt.com/products/dograh?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-dograh-3" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1217382&theme=light&period=daily&t=1786607298379" alt="Dograh - #1 Product of the Day | Product Hunt" width="250" height="54"></a>
   &nbsp;
+  <a href="https://www.producthunt.com/products/dograh?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-dograh-3" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1217382&theme=light&period=weekly&t=1786966826740" alt="Dograh - #1 Product of the Week | Product Hunt" width="250" height="54"></a>
+  <br />
+  <a href="https://www.producthunt.com/products/dograh?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-dograh-3" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1217382&theme=neutral&period=monthly&t=1788261987782" alt="Dograh - #1 Product of the Month | Product Hunt" width="250" height="54"></a>
+  &nbsp;
+  <a href="https://www.producthunt.com/products/dograh?embed=true&utm_source=badge-top-post-topic-badge&utm_medium=badge&utm_campaign=badge-dograh-3" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-topic-badge.svg?post_id=1217382&theme=neutral&period=monthly&topic_id=267&t=1788261987782" alt="Dograh - #1 Product of the Month, Developer Tools | Product Hunt" width="250" height="54"></a>
+  <br />
   <a href="https://trendshift.io/repositories/31007" target="_blank"><img src="https://trendshift.io/api/badge/repositories/31007" alt="dograh-hq%2Fdograh | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </p>
 
@@ -124,8 +132,8 @@ curl -o docker-compose.yaml https://raw.githubusercontent.com/dograh-hq/dograh/m
 
 ## CALMOS / Sakinah Scenario Console
 
-CALMOS Connect v1.45.6 includes the Sakinah Scenario Console at `/sakinah` and
-its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
+CALMOS Connect includes the Sakinah Scenario Console at `/sakinah` and its
+AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
 
 - Durable Agent Runs/Call History records for active and completed calls,
   including transcripts, utterances, scores, events, latency, and provider
@@ -144,6 +152,30 @@ Both consoles show durable run history with conversation previews and signed
 download controls for available recordings and transcripts. Call persistence
 and memory extraction are asynchronous so long-term storage is not on the
 real-time audio → STT → LLM → TTS response path.
+
+### HUMAIN voices, Run Details, and simulation configuration
+
+- To configure HUMAIN, save the BYOK provider and API key first; then use
+  **Load HUMAIN account voices** to search descriptive account-profile names
+  and save the selected stable profile ID. **Enter profile ID** remains a
+  supported override for an ID that is not in the returned list. Credentials
+  are resolved server-side and are never returned to the browser.
+- `workflow_runs` remains the single source of truth for Run Details. PostgreSQL
+  stores run identifiers, status, metadata, utterances, and ongoing/final CALM
+  scores; configured private MinIO or S3 stores recording/transcript objects,
+  with database references. Authorized lookups are tenant-scoped and
+  require the run ID plus normalized phone correlation; replay links are short
+  lived and audited. If a referenced media object cannot be signed, Run Details
+  still returns the SQL-backed transcript, utterances, and CALM score snapshots,
+  and identifies the unavailable track without exposing storage paths. During
+  the caller-identity migration, older rows use a keyed hash of their protected
+  SQL caller/destination field until the caller-identifiers row is backfilled.
+- Simulations resolve Sakinah and Service User against their own draft
+  definitions (falling back to published when no draft exists). Definition-level
+  V2 settings win; workflow-level settings remain the fallback for seeded
+  simulators. If the Service User simulator has no TTS override, it inherits
+  only Sakinah's resolved TTS voice so the heard service-user flow stays aligned
+  without copying Sakinah's prompt, LLM, or STT configuration.
 
 Administrators can open `/sakinah/scenarios` to bulk-import scenario JSON files
 from a ZIP or from multiple individual files. The importer validates every JSON
@@ -203,9 +235,9 @@ you intend to erase local call records and recordings.
 ### Self-Hosted Deployment
 
 For detailed deployment instructions including remote server setup with HTTPS, see our [Docker Deployment Guide](https://docs.dograh.com/deployment/docker#option-2-remote-server-deployment).
-For the CALMOS Connect v1.45.6 data model, AWS storage configuration, memory
+For the CALMOS Connect v1.46.0.4.2.D data model, AWS storage configuration, memory
 privacy flow, replay flow, migrations, and rollback procedure, see
-[`docs/developer/calmos-connect-v1.45.6.mdx`](docs/developer/calmos-connect-v1.45.6.mdx).
+[`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
 
 ### Cloud Version
 
@@ -228,7 +260,7 @@ You can go to [https://docs.dograh.com](https://docs.dograh.com/) for our docume
 - **GitHub Discussions** — share use cases, ask questions, swap workflow recipes.
 - **GitHub Issues** — report bugs or request features.
 
-👉 Join us → [Dograh Community Slack](https://join.slack.com/t/dograh-community/shared_invite/zt-3zjb5vwvl-j7hRz3_F1SOn5cH~jm5f5g)
+👉 Join us → [Dograh Community Slack](https://join.slack.com/t/dograh-community/shared_invite/zt-4787daqcn-3TDiQUh~3xrr3pwAqR9wpQ)
 
 ## 🙌 Contributing
 
@@ -260,5 +292,5 @@ Founded by YC alumni and exit founders committed to keeping voice AI open and ac
   <p align="center">
     <a href="https://github.com/dograh-hq/dograh">⭐ Star us on GitHub</a> |
     <a href="https://app.dograh.com">☁️ Try Cloud Version</a> |
-    <a href="https://join.slack.com/t/dograh-community/shared_invite/zt-3zjb5vwvl-j7hRz3_F1SOn5cH~jm5f5g">💬 Join Slack</a>
+    <a href="https://join.slack.com/t/dograh-community/shared_invite/zt-4787daqcn-3TDiQUh~3xrr3pwAqR9wpQ">💬 Join Slack</a>
   </p>

@@ -11,7 +11,6 @@ interface SessionStatusProps {
     savedSessionId: string | null;
     onEnd: () => void;
 }
-
 export function SessionStatus({
     connectionStatus,
     isStarting,
@@ -44,4 +43,3 @@ export function SessionStatus({
         </div>
     );
 }
-
