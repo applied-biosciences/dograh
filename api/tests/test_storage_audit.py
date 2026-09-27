@@ -54,6 +54,7 @@ async def test_audit_reports_verified_database_and_missing_audio(monkeypatch):
     monkeypatch.setattr(storage_audit.db_client, "get_workflow_run", get_run)
     monkeypatch.setattr(storage_audit.db_client, "get_utterances_for_run", empty)
     monkeypatch.setattr(storage_audit.db_client, "get_call_recordings_for_run", empty)
+    monkeypatch.setattr(storage_audit.db_client, "get_artifact_replications_for_run", empty)
 
     result = await storage_audit.audit_run_storage(7, organization_id=11)
 
@@ -81,11 +82,36 @@ async def test_audit_does_not_expect_audio_for_an_initialized_run(monkeypatch):
     monkeypatch.setattr(storage_audit.db_client, "get_workflow_run", get_run)
     monkeypatch.setattr(storage_audit.db_client, "get_utterances_for_run", empty)
     monkeypatch.setattr(storage_audit.db_client, "get_call_recordings_for_run", empty)
+    monkeypatch.setattr(storage_audit.db_client, "get_artifact_replications_for_run", empty)
 
     result = await storage_audit.audit_run_storage(7, organization_id=11)
 
     assert result["minio"]["status"] == "not_expected"
     assert result["minio"]["objects"] == []
+
+
+@pytest.mark.asyncio
+async def test_audit_labels_direct_s3_artifacts_as_primary(monkeypatch):
+    storage = _Storage()
+    storage.bucket_name = "dograh-recordings"
+    monkeypatch.setattr(storage_audit, "storage_fs", storage)
+
+    async def get_run(*args, **kwargs):
+        return _run(storage_backend="s3")
+
+    async def empty(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(storage_audit.db_client, "get_workflow_run", get_run)
+    monkeypatch.setattr(storage_audit.db_client, "get_utterances_for_run", empty)
+    monkeypatch.setattr(storage_audit.db_client, "get_call_recordings_for_run", empty)
+
+    result = await storage_audit.audit_run_storage(7, organization_id=11)
+
+    assert result["minio"]["configured"] is False
+    assert result["aws"]["role"] == "primary"
+    assert result["aws"]["status"] == "verified"
+    assert result["aws"]["bucket"] == "dograh-recordings"
 
 
 def _artifact_run():

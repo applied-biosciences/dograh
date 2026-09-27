@@ -1457,14 +1457,28 @@ async def get_workflow_run(
     if not run:
         raise HTTPException(status_code=404, detail="Workflow run not found")
 
+    # Older and partially migrated runs may have recording metadata rows even
+    # when denormalized URL fields are empty. Prefer canonical object keys so
+    # their persisted artifacts remain available from this page.
+    recording_rows = await db_client.get_call_recordings_for_run(run.id)
+    mixed_recording = next(
+        (item for item in recording_rows if item.track == "mixed"), None
+    )
+    recording_url = (
+        run.recording_object_key
+        or run.recording_url
+        or (mixed_recording.object_key if mixed_recording else None)
+    )
+    transcript_url = run.transcript_object_key or run.transcript_url
+
     public_access_token = run.public_access_token
     user_recording_url = get_recording_storage_key(run.extra, "user")
     bot_recording_url = get_recording_storage_key(run.extra, "bot")
     has_user_recording = has_recording_track(run.extra, "user")
     has_bot_recording = has_recording_track(run.extra, "bot")
     if (
-        run.transcript_url
-        or run.recording_url
+        transcript_url
+        or recording_url
         or has_user_recording
         or has_bot_recording
     ) and not public_access_token:
@@ -1476,8 +1490,8 @@ async def get_workflow_run(
         "name": run.name,
         "mode": run.mode,
         "is_completed": run.is_completed,
-        "transcript_url": run.transcript_url,
-        "recording_url": run.recording_url,
+        "transcript_url": transcript_url,
+        "recording_url": recording_url,
         "user_recording_url": user_recording_url,
         "bot_recording_url": bot_recording_url,
         "transcript_public_url": artifact_url(public_access_token, "transcript"),

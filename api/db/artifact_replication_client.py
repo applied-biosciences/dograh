@@ -9,6 +9,18 @@ from api.db.models import ArtifactReplicationStatusModel
 
 
 class ArtifactReplicationClient(BaseDBClient):
+    async def get_artifact_replications_for_run(
+        self, run_id: int
+    ) -> list[ArtifactReplicationStatusModel]:
+        """Return the primary-to-S3 replication records for a single run."""
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(ArtifactReplicationStatusModel)
+                .where(ArtifactReplicationStatusModel.run_id == run_id)
+                .order_by(ArtifactReplicationStatusModel.artifact_type.asc())
+            )
+            return list(result.scalars().all())
+
     async def upsert_artifact_replication_status(
         self,
         *,

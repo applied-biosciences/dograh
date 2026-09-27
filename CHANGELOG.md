@@ -1,5 +1,23 @@
 # Changelog
 
+## Sakinah v1.47.0.10 (2026-09-27)
+
+- Fixed Run Details downloads when legacy recording/transcript URL columns are
+  empty by falling back to persisted canonical object keys and mixed recording
+  metadata; the existing authenticated signed-download path remains in use.
+- Replaced the misleading “AWS S3 configured but unused” storage label with a
+  per-run S3 object check backed by durable replication records, including
+  direct verification for older runs without a replication index.
+- Published each live CALM analysis event before best-effort persistence, and
+  isolated PostgreSQL/MinIO failures so a storage error cannot hide scoring
+  from the active simulation panel or stop Sakinah's prompt update.
+- Kept ongoing CALM scores in Dograh PostgreSQL and score-only MinIO objects,
+  with the configured AWS S3 secondary replication path. The Dograh database
+  must only be pointed at an RDS instance provisioned for Dograh; the existing
+  survey RDS instances are not compatible targets.
+- Bumped application, UI package/lockfile, and release metadata to
+  `v1.47.0.10`.
+
 ## Sakinah v1.47.0.9 (2026-09-27)
 
 - Kept Sakinah and Service User simulation TTS configurations independent. Both

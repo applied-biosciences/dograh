@@ -8,9 +8,16 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from api.constants import ENABLE_AWS_S3_SECONDARY, RECORD_CALLS
+from api.constants import (
+    AWS_RECORDINGS_BUCKET,
+    AWS_REGION,
+    ENABLE_AWS_S3_SECONDARY,
+    RECORD_CALLS,
+)
 from api.db import db_client
 from api.enums import StorageBackend
+from api.services.filesystem.s3 import S3FileSystem
+from api.services.s3_secondary_replication import _destination_key
 from api.services.storage import storage_fs
 
 
@@ -71,11 +78,7 @@ async def audit_run_storage(
                 "recording_metadata_exists": False,
             },
             "minio": {"status": "not_expected", "configured": False, "objects": []},
-            "aws": {
-                "status": "configured_but_unused"
-                if ENABLE_AWS_S3_SECONDARY
-                else "not_configured"
-            },
+            "aws": {"status": "missing", "objects_found": 0, "objects": []},
         }
 
     utterances = await db_client.get_utterances_for_run(run_id)
@@ -115,6 +118,87 @@ async def audit_run_storage(
             and run_mode not in {"textchat", "chat"}
         )
     )
+    # A run records the primary backend that wrote it.  AWS primary and AWS
+    # secondary are distinct: a primary-S3 run has already been checked above
+    # through ``storage_fs`` and must not be reported as an unused secondary.
+    primary_is_s3 = run.storage_backend == StorageBackend.S3.value
+    aws_objects: list[dict[str, Any]] = []
+    aws_status = "not_configured"
+    aws_role = None
+    if primary_is_s3:
+        aws_role = "primary"
+        aws_objects = [dict(item) for item in objects]
+        if not aws_objects:
+            aws_status = "pending" if expected_audio else "not_expected"
+        elif all(item["status"] == "verified" for item in aws_objects):
+            aws_status = "verified"
+        else:
+            aws_status = "missing"
+    elif ENABLE_AWS_S3_SECONDARY and AWS_RECORDINGS_BUCKET:
+        aws_role = "secondary"
+        replication_rows = await db_client.get_artifact_replications_for_run(run_id)
+        if replication_rows:
+            aws_fs = S3FileSystem(
+                bucket_name=AWS_RECORDINGS_BUCKET, region_name=AWS_REGION
+            )
+            for row in replication_rows:
+                key = row.s3_object_key or _destination_key(row.primary_object_key)
+                try:
+                    metadata = await asyncio.wait_for(
+                        aws_fs.aget_file_metadata(key), timeout=5
+                    )
+                    exists = metadata is not None
+                except Exception:
+                    metadata = None
+                    exists = False
+                aws_objects.append(
+                    {
+                        "type": row.artifact_type,
+                        "key": key,
+                        "status": "verified" if exists else "missing",
+                        "replication_status": row.replication_status,
+                        "size_bytes": metadata.get("size") if metadata else None,
+                    }
+                )
+            if aws_objects and all(item["status"] == "verified" for item in aws_objects):
+                aws_status = "verified"
+            elif any(item["status"] == "pending" for item in aws_objects):
+                aws_status = "pending"
+            else:
+                aws_status = "missing"
+        else:
+            # Older runs may predate the replication index. Still verify known
+            # transcript/recording keys directly instead of reporting a
+            # configured AWS destination as unused without checking it.
+            known_objects = [item for item in objects if item.get("key")]
+            if known_objects:
+                aws_fs = S3FileSystem(
+                    bucket_name=AWS_RECORDINGS_BUCKET, region_name=AWS_REGION
+                )
+                for item in known_objects:
+                    key = _destination_key(item["key"])
+                    try:
+                        metadata = await asyncio.wait_for(
+                            aws_fs.aget_file_metadata(key), timeout=5
+                        )
+                    except Exception:
+                        metadata = None
+                    aws_objects.append(
+                        {
+                            "type": item["type"],
+                            "key": key,
+                            "status": "verified" if metadata else "missing",
+                            "size_bytes": metadata.get("size") if metadata else None,
+                        }
+                    )
+                aws_status = (
+                    "verified"
+                    if all(item["status"] == "verified" for item in aws_objects)
+                    else "missing"
+                )
+            else:
+                aws_status = "pending" if objects else "not_expected"
+
     transcript_status = _status(
         exists=bool(run.full_transcript or transcript_key), expected=transcript_expected
     )
@@ -159,8 +243,14 @@ async def audit_run_storage(
             "objects": objects,
         },
         "aws": {
-            "status": "configured_but_unused"
-            if ENABLE_AWS_S3_SECONDARY
-            else "not_configured"
+            "status": aws_status,
+            "role": aws_role,
+            "bucket": (
+                getattr(storage_fs, "bucket_name", None)
+                if primary_is_s3
+                else (AWS_RECORDINGS_BUCKET if ENABLE_AWS_S3_SECONDARY else None)
+            ),
+            "objects_found": sum(item["status"] == "verified" for item in aws_objects),
+            "objects": aws_objects,
         },
     }

@@ -15,12 +15,14 @@ import {
 } from '@/components/ui/dialog';
 import { PostHogEvent } from '@/constants/posthog-events';
 import { getCallReplay } from '@/lib/callHistory';
-import { downloadFile, getSignedUrl } from '@/lib/files';
+import { downloadFile, downloadSignedUrl, downloadTextFile, getSignedUrl } from '@/lib/files';
 
 export function MediaPreviewDialog() {
     const [isOpen, setIsOpen] = useState(false);
     const [audioSignedUrl, setAudioSignedUrl] = useState<string | null>(null);
+    const [audioDownloadUrl, setAudioDownloadUrl] = useState<string | null>(null);
     const [transcriptContent, setTranscriptContent] = useState<string | null>(null);
+    const [transcriptDownloadUrl, setTranscriptDownloadUrl] = useState<string | null>(null);
     const [unavailableRecordings, setUnavailableRecordings] = useState<string[]>([]);
     const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
     const [recordingKey, setRecordingKey] = useState<string | null>(null);
@@ -32,7 +34,9 @@ export function MediaPreviewDialog() {
             if (!recordingUrl && !transcriptUrl && !callId) return;
             setMediaLoading(true);
             setAudioSignedUrl(null);
+            setAudioDownloadUrl(null);
             setTranscriptContent(null);
+            setTranscriptDownloadUrl(null);
             setUnavailableRecordings([]);
             setRecordingKey(recordingUrl);
             setTranscriptKey(transcriptUrl);
@@ -48,9 +52,13 @@ export function MediaPreviewDialog() {
                         .map((item) => `${item.speaker}: ${item.transcript}`)
                         .join('\n');
                     setAudioSignedUrl(replay.recording_signed_url ?? fallbackRecording?.signed_url ?? null);
-                    setRecordingKey(replay.recording_key ?? recordingUrl);
-                    setTranscriptKey(replay.transcript_key ?? transcriptUrl);
+                    setAudioDownloadUrl(replay.recording_download_url ?? fallbackRecording?.download_url ?? null);
+                    // Run Details intentionally does not expose object keys;
+                    // its authorized replay response provides download URLs.
+                    setRecordingKey(recordingUrl);
+                    setTranscriptKey(transcriptUrl);
                     setTranscriptContent(transcript || null);
+                    setTranscriptDownloadUrl(replay.transcript_download_url ?? null);
                     setUnavailableRecordings(replay.unavailable_recordings ?? []);
                     posthog.capture(PostHogEvent.TRANSCRIPT_VIEWED, {
                         run_id: runId,
@@ -152,13 +160,17 @@ export function MediaPreviewDialog() {
                             <Button variant="secondary">Close</Button>
                         </DialogClose>
                         <div className="flex gap-2">
-                            {recordingKey && (
-                                <Button variant="outline" onClick={() => downloadFile(recordingKey)}>
+                            {(audioDownloadUrl || recordingKey) && (
+                                <Button variant="outline" onClick={() => audioDownloadUrl ? downloadSignedUrl(audioDownloadUrl) : downloadFile(recordingKey)}>
                                     Download Recording
                                 </Button>
                             )}
-                            {transcriptKey && (
-                                <Button variant="outline" onClick={() => downloadFile(transcriptKey)}>
+                            {(transcriptDownloadUrl || transcriptContent || transcriptKey) && (
+                                <Button variant="outline" onClick={() => transcriptDownloadUrl
+                                    ? downloadSignedUrl(transcriptDownloadUrl)
+                                    : transcriptContent
+                                        ? downloadTextFile(transcriptContent, `run-${selectedRunId ?? 'transcript'}-transcript.txt`)
+                                        : downloadFile(transcriptKey)}>
                                     Download Transcript
                                 </Button>
                             )}

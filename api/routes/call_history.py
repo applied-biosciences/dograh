@@ -15,14 +15,15 @@ router = APIRouter(prefix="/call-history", tags=["call-history"])
 class RecordingReplayTrack(BaseModel):
     track: str
     signed_url: str
+    download_url: str | None = None
 
 
 class CallReplayResponse(BaseModel):
     call_id: str
     agent_run_id: int
     recording_signed_url: str | None = None
-    recording_key: str | None = None
-    transcript_key: str | None = None
+    recording_download_url: str | None = None
+    transcript_download_url: str | None = None
     expires_in: int = Field(ge=60, le=900)
     transcript: str | None = None
     utterances: list[dict[str, Any]] = Field(default_factory=list)
@@ -45,6 +46,7 @@ async def _build_replay_response(
 ) -> CallReplayResponse:
     """Issue short-lived object URLs only after the scoped DB lookup succeeds."""
     signed_url = None
+    recording_download_url = None
     signed_tracks: list[RecordingReplayTrack] = []
     unavailable_tracks: list[str] = []
     recording_rows = record.get("recordings") or []
@@ -61,6 +63,7 @@ async def _build_replay_response(
         track = "assistant" if track == "bot" else track
         recording_key = recording.get("recording_key")
         track_url = None
+        download_url = None
         if recording_key:
             try:
                 backend = recording.get("storage_backend")
@@ -68,8 +71,15 @@ async def _build_replay_response(
                 track_url = await storage.aget_signed_url(
                     recording_key, expiration=expires_in, force_inline=True
                 )
+                # A player needs an inline response, while a download needs an
+                # attachment response. Return both signed capabilities, never
+                # the private object key that created them.
+                download_url = await storage.aget_signed_url(
+                    recording_key, expiration=expires_in, force_inline=False
+                )
             except Exception:
                 track_url = None
+                download_url = None
 
         # Media is optional for Run Details. The authorized SQL record remains
         # useful when an object was deleted, is being replicated, or its store
@@ -78,9 +88,27 @@ async def _build_replay_response(
             if track not in unavailable_tracks:
                 unavailable_tracks.append(track)
             continue
-        signed_tracks.append(RecordingReplayTrack(track=track, signed_url=track_url))
+        signed_tracks.append(
+            RecordingReplayTrack(
+                track=track, signed_url=track_url, download_url=download_url
+            )
+        )
         if track == "mixed":
             signed_url = track_url
+            recording_download_url = download_url
+
+    transcript_download_url = None
+    transcript_key = record.get("transcript_key")
+    if transcript_key:
+        try:
+            backend = record.get("storage_backend")
+            storage = get_storage_for_backend(backend) if backend else storage_fs
+            transcript_download_url = await storage.aget_signed_url(
+                transcript_key, expiration=expires_in, force_inline=False
+            )
+        except Exception:
+            # The SQL transcript still lets the UI offer a local text export.
+            transcript_download_url = None
 
     try:
         await db_client.record_audit_event(
@@ -108,8 +136,8 @@ async def _build_replay_response(
         call_id=record["call_id"],
         agent_run_id=record["agent_run_id"],
         recording_signed_url=signed_url,
-        recording_key=record.get("recording_key"),
-        transcript_key=record.get("transcript_key"),
+        recording_download_url=recording_download_url,
+        transcript_download_url=transcript_download_url,
         expires_in=expires_in,
         transcript=record.get("transcript"),
         utterances=record.get("utterances", []),

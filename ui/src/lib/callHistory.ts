@@ -4,8 +4,8 @@ export interface CallReplay {
     call_id: string;
     agent_run_id: number;
     recording_signed_url: string | null;
-    recording_key?: string | null;
-    transcript_key?: string | null;
+    recording_download_url?: string | null;
+    transcript_download_url?: string | null;
     expires_in: number;
     transcript: string | null;
     calm_score: Record<string, unknown>;
@@ -14,6 +14,7 @@ export interface CallReplay {
     recordings: Array<{
         track: string;
         signed_url: string;
+        download_url?: string | null;
     }>;
     /** SQL-backed details remain available when a recording object cannot be replayed. */
     unavailable_recordings?: string[];

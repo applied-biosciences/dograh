@@ -13,8 +13,8 @@ async def test_call_replay_returns_short_lived_signed_url_without_storage_detail
         async def aget_signed_url(self, key, expiration, force_inline):
             assert key == "recordings/2026/09/service-user/call/call.wav"
             assert expiration == 300
-            assert force_inline is True
-            return "https://signed.example/replay?expires=300"
+            suffix = "inline" if force_inline else "download"
+            return f"https://signed.example/replay?mode={suffix}"
 
     class _DB:
         audit = None
@@ -48,6 +48,8 @@ async def test_call_replay_returns_short_lived_signed_url_without_storage_detail
     assert "bucket" not in payload
     assert payload["recordings"][0]["track"] == "mixed"
     assert payload["recordings"][0]["signed_url"].startswith("https://signed.example/")
+    assert payload["recording_download_url"].endswith("mode=download")
+    assert payload["recordings"][0]["download_url"].endswith("mode=download")
     assert fake_db.audit["event_type"] == "recording_replay_url_issued"
     assert fake_db.audit["event_metadata"]["expires_in"] == 300
 

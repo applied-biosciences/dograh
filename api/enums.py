@@ -140,9 +140,17 @@ class StorageBackend(Enum):
         it copies already-persisted MinIO objects and must not change the
         synchronous write/read path for a workflow run.
         """
-        from api.constants import ENABLE_AWS_S3_PRIMARY
+        from api.constants import ENABLE_AWS_S3_PRIMARY, LEGACY_ENABLE_AWS_S3
 
-        if ENABLE_AWS_S3_PRIMARY:
+        # ``ENABLE_AWS_S3`` was the original public deployment switch. It
+        # selected S3 before the explicit primary/secondary topology existed,
+        # so treating it as a no-op silently sends completed runs to MinIO
+        # despite an operator configuring an AWS bucket.
+        #
+        # MinIO-primary deployments that replicate asynchronously must instead
+        # set ENABLE_AWS_S3_SECONDARY=true and leave both primary switches
+        # false. Secondary storage is intentionally not selected here.
+        if ENABLE_AWS_S3_PRIMARY or LEGACY_ENABLE_AWS_S3:
             return cls.S3
         return cls.MINIO
 

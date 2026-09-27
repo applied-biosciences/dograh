@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from api.services.sakinah import simulation as simulation_service
 from api.services.pipecat.ws_sender_registry import get_ws_sender
 from api.services.quota_service import QuotaCheckResult
 from api.services.sakinah.simulation import (
@@ -26,6 +27,7 @@ from api.services.sakinah.simulation import (
     SERVICE_USER_ROLE,
     Simulation,
     SimulationAuthorizationError,
+    SimulationManager,
     _simulation_workflow_configurations,
     simulation_manager,
 )
@@ -38,6 +40,41 @@ from api.services.sakinah.workflow import (
 )
 
 SCENARIO = "You are Amina, a 34-year-old feeling overwhelmed at work."
+
+
+@pytest.mark.asyncio
+async def test_calm_scores_are_published_even_when_progress_database_write_fails(monkeypatch):
+    simulation = Simulation(
+        "calm-ui-regression",
+        organization_id=1,
+        scenario=SCENARIO,
+        max_duration_seconds=60,
+        user_id=4,
+    )
+    simulation.agents[SAKINAH_ROLE] = SimpleNamespace(workflow_run_id=20)
+    monkeypatch.setattr(
+        simulation_service.db_client,
+        "update_sakinah_run_progress",
+        AsyncMock(side_effect=RuntimeError("database unavailable")),
+    )
+    monkeypatch.setattr(
+        "api.services.workflow_run_artifacts.persist_calm_score_snapshot",
+        AsyncMock(return_value={"status": "success"}),
+        raising=False,
+    )
+    llm_updates = []
+
+    class Engine:
+        async def _update_llm_context(self, prompt, _messages):
+            llm_updates.append(prompt)
+
+    await SimulationManager()._make_calm_prompt_callback(simulation)(
+        Engine(), SimpleNamespace(messages=[{"role": "user", "content": "I feel anxious"}])
+    )
+
+    event = next(event for event in simulation.events if event["type"] == "calm-analysis")
+    assert event["payload"]["calm_scores"]
+    assert llm_updates
 
 
 def test_simulation_uses_workflow_config_when_definition_config_is_empty():
@@ -242,6 +279,11 @@ async def test_simulation_lifecycle_start_events_stop(
             )
             assert (
                 simulation.agents[SERVICE_USER_ROLE].resolved_user_config.tts.voice
+                == "service-user-voice"
+            )
+            assert snapshot["agents"][SAKINAH_ROLE]["resolved_tts"]["voice"] == "sakinah-voice"
+            assert (
+                snapshot["agents"][SERVICE_USER_ROLE]["resolved_tts"]["voice"]
                 == "service-user-voice"
             )
             # Both fake pipelines emit their chunks; consecutive same-role

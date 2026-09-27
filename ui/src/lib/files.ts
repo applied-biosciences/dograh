@@ -32,6 +32,26 @@ export async function downloadFile(url: string | null) {
     }
 }
 
+/** Download an already-authorized attachment URL returned by Run Details. */
+export function downloadSignedUrl(url: string | null) {
+    if (!url) return;
+    const target = window.open(url, "_blank");
+    if (!target) window.location.assign(url);
+}
+
+/** Download the SQL-backed transcript when its object-store copy is unavailable. */
+export function downloadTextFile(text: string, filename: string) {
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+}
+
 /**
  * Return a signed URL for a given S3 key without triggering a download.
  * Useful for previewing media (audio or transcript) in-browser first.

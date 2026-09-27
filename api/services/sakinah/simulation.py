@@ -91,6 +91,8 @@ class SimulationAgent:
         workflow_run_id: int,
         transport: InternalTransport,
         resolved_user_config: Any | None = None,
+        definition_id: int | None = None,
+        resolved_tts: dict[str, Any] | None = None,
     ):
         self.role = role
         self.workflow_id = workflow_id
@@ -100,6 +102,11 @@ class SimulationAgent:
         # This prevents a Service User voice override being replaced by the
         # organization default during asynchronous pipeline startup.
         self.resolved_user_config = resolved_user_config
+        self.definition_id = definition_id
+        # Diagnostics deliberately contain only non-secret TTS selection
+        # fields. This lets an operator verify which per-role voice actually
+        # started without exposing provider credentials.
+        self.resolved_tts = resolved_tts or {}
         self.pipeline_task: Optional[asyncio.Task] = None
 
 
@@ -208,6 +215,8 @@ class Simulation:
                 role: {
                     "workflow_id": agent.workflow_id,
                     "workflow_run_id": agent.workflow_run_id,
+                    "definition_id": agent.definition_id,
+                    "resolved_tts": agent.resolved_tts,
                 }
                 for role, agent in self.agents.items()
             },
@@ -415,6 +424,16 @@ class SimulationManager:
                 workflow_run_id=run.id,
                 transport=transport,
                 resolved_user_config=effective,
+                definition_id=run_inputs.definition_id,
+                resolved_tts={
+                    "provider": getattr(
+                        getattr(tts, "provider", None),
+                        "value",
+                        getattr(tts, "provider", None),
+                    ),
+                    "model": getattr(tts, "model", None),
+                    "voice": getattr(tts, "voice", None),
+                },
             )
 
         # Authorize both runs before any billable runtime starts (mirrors the
@@ -515,20 +534,44 @@ class SimulationManager:
                 latest_utterance,
                 conversation_context=conversation_context,
             )
+            # Publish before persistence so an SQL/MinIO outage cannot suppress
+            # the scoring panel in the live simulation. Persistence failures
+            # are isolated below and never stop the conversation.
+            simulation.publish(
+                {
+                    "role": SAKINAH_ROLE,
+                    "type": "calm-analysis",
+                    "payload": turn,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+            )
+            # Analysis is applied only to Sakinah's LLM. The service-user
+            # workflow has its own context and never receives this callback.
+            await engine._update_llm_context(turn["prompt_sent_to_llm"], [])
+
             # A running simulation must not hold CALM state only in process
             # memory: it is needed by the authorized Run Details view after a
-            # reconnect or worker restart.  Store structured scores only, not
-            # the prompt/transcript that produced them.
+            # reconnect or worker restart. Store structured scores only, not
+            # the prompt/transcript that produced them. Each destination is
+            # best-effort and independent so one failing store cannot suppress
+            # the others or the UI event above.
             if simulation.user_id is not None:
-                await db_client.update_sakinah_run_progress(
-                    user_id=simulation.user_id,
-                    session_id=simulation.id,
-                    calm_turns=simulation.calm_runtime.turns,
-                    preview_data={
-                        "calm_scores": simulation.snapshot()["calm_scores"],
-                        "calm_trend": simulation.snapshot()["calm_trend"],
-                    },
-                )
+                try:
+                    await db_client.update_sakinah_run_progress(
+                        user_id=simulation.user_id,
+                        session_id=simulation.id,
+                        calm_turns=simulation.calm_runtime.turns,
+                        preview_data={
+                            "calm_scores": simulation.snapshot()["calm_scores"],
+                            "calm_trend": simulation.snapshot()["calm_trend"],
+                        },
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "CALM database snapshot failed for simulation {} ({})",
+                        simulation.id,
+                        type(exc).__name__,
+                    )
                 try:
                     from api.services.workflow_run_artifacts import (
                         persist_calm_score_snapshot,
@@ -539,24 +582,11 @@ class SimulationManager:
                         simulation.calm_runtime.turns,
                     )
                 except Exception as exc:
-                    # PostgreSQL is authoritative and already committed above;
-                    # an object-store outage must not interrupt the call.
                     logger.warning(
                         "CALM object snapshot failed for simulation {} ({})",
                         simulation.id,
                         type(exc).__name__,
                     )
-            # Analysis is applied only to Sakinah's LLM. The service-user
-            # workflow has its own context and never receives this callback.
-            await engine._update_llm_context(turn["prompt_sent_to_llm"], [])
-            simulation.publish(
-                {
-                    "role": SAKINAH_ROLE,
-                    "type": "calm-analysis",
-                    "payload": turn,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                }
-            )
 
         return prepare_prompt
 
