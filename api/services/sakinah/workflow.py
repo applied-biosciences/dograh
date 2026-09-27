@@ -6,7 +6,9 @@ WORKFLOW_NAME = "Sakinah Scenario Console"
 SERVICE_USER_WORKFLOW_NAME = "Sakinah Service User Simulator"
 
 
-def is_sakinah_workflow(workflow, configurations: dict | None = None) -> bool:
+def is_sakinah_workflow(
+    workflow, configurations: dict | None = None, definition=None
+) -> bool:
     """Whether a pinned run should receive the live CALM tracker.
 
     Agent Tests use the draft/pinned definition while inbound calls use the
@@ -25,7 +27,30 @@ def is_sakinah_workflow(workflow, configurations: dict | None = None) -> bool:
         if isinstance(effective_configurations, dict)
         else None
     )
-    return isinstance(calm, dict) and calm.get("enabled") is True
+    if isinstance(calm, dict) and calm.get("enabled") is True:
+        return True
+
+    # Inbound routes commonly point at a renamed copy of the seeded Sakinah
+    # workflow.  Its pinned definition is the only stable identity in that
+    # case: mutable names and workflow-level config may be intentionally
+    # different from the test/draft version.  Keep this narrowly scoped to
+    # the seed's supporter instruction so an unrelated clinical workflow is
+    # never opted into CALM processing merely because its name contains it.
+    workflow_json = getattr(definition, "workflow_json", None)
+    if not isinstance(workflow_json, dict):
+        workflow_json = getattr(workflow, "workflow_json", None)
+    if not isinstance(workflow_json, dict):
+        return False
+    for node in (workflow_json or {}).get("nodes", []):
+        if not isinstance(node, dict) or node.get("type") != "startCall":
+            continue
+        prompt = (node.get("data") or {}).get("prompt")
+        if not isinstance(prompt, str):
+            continue
+        normalized = " ".join(prompt.lower().split())
+        if "you are sakinah" in normalized and "compassionate" in normalized:
+            return True
+    return False
 
 # Superseded seed prompts, kept verbatim so ensure_* can recognize and
 # upgrade a stale seed without touching user-customized workflows. Append

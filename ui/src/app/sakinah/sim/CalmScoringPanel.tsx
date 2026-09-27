@@ -1,5 +1,9 @@
 "use client";
 
+import { Download } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { downloadTextFile } from "@/lib/files";
 import { cn } from "@/lib/utils";
 
 export interface CalmScore {
@@ -21,10 +25,44 @@ export interface CalmAnalysis {
     trend?: { parameters?: Record<string, CalmTrend>; interpretations?: string[] };
     utterance_verbatim?: string;
     prompt_sent_to_llm?: string;
+    turn_id?: string | number;
 }
 
 interface CalmScoringPanelProps {
     analysis: CalmAnalysis | null;
+    history?: CalmAnalysis[];
+}
+
+const numericEntries = (scores: Record<string, CalmScore>) => Object.fromEntries(
+    Object.entries(scores).flatMap(([name, value]) => {
+        const score = typeof value === "number" ? value : value.score;
+        return typeof score === "number" && Number.isFinite(score) ? [[name, score]] : [];
+    }),
+);
+
+export function simulationScoreHistoryExport(history: CalmAnalysis[]) {
+    return {
+        artifact_kind: "dograh-calm-score-history/v1",
+        exported_at: new Date().toISOString(),
+        turns: history.map((analysis, index) => ({
+            turn_id: analysis.turn_id ?? index + 1,
+            turn_index: index + 1,
+            scores: numericEntries(analysis.calm_scores),
+            confidence: analysis.calm_confidence ?? {},
+        })),
+    };
+}
+
+export function simulationPromptHistoryExport(history: CalmAnalysis[]) {
+    return {
+        artifact_kind: "dograh-sakinah-engineered-prompt-history/v1",
+        exported_at: new Date().toISOString(),
+        turns: history.flatMap((analysis, index) => analysis.prompt_sent_to_llm ? [{
+            turn_id: analysis.turn_id ?? index + 1,
+            turn_index: index + 1,
+            engineered_prompt: analysis.prompt_sent_to_llm,
+        }] : []),
+    };
 }
 
 function trendDisplay(trend?: CalmTrend) {
@@ -42,7 +80,7 @@ function trendDisplay(trend?: CalmTrend) {
     };
 }
 
-export function CalmScoringPanel({ analysis }: CalmScoringPanelProps) {
+export function CalmScoringPanel({ analysis, history = [] }: CalmScoringPanelProps) {
     const scores = analysis?.calm_scores ?? {};
     const trends = analysis?.trend?.parameters ?? {};
     const entries = Object.entries(scores);
@@ -54,7 +92,31 @@ export function CalmScoringPanel({ analysis }: CalmScoringPanelProps) {
                     <h2 className="text-lg font-semibold">CALM scoring</h2>
                     <p className="text-sm text-muted-foreground">Movement compares each score with the immediately previous turn.</p>
                 </div>
-                <span className="text-xs uppercase tracking-[0.15em] text-muted-foreground">Stage 4</span>
+                <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-2"
+                        disabled={history.length === 0}
+                        onClick={() => downloadTextFile(JSON.stringify(simulationScoreHistoryExport(history), null, 2), "calm-score-history.json", "application/json;charset=utf-8")}
+                    >
+                        <Download className="h-4 w-4" />
+                        Download score history
+                    </Button>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-2"
+                        disabled={!history.some((item) => Boolean(item.prompt_sent_to_llm))}
+                        onClick={() => downloadTextFile(JSON.stringify(simulationPromptHistoryExport(history), null, 2), "sakinah-engineered-prompt-history.json", "application/json;charset=utf-8")}
+                    >
+                        <Download className="h-4 w-4" />
+                        Download prompt history
+                    </Button>
+                    <span className="text-xs uppercase tracking-[0.15em] text-muted-foreground">Stage 4</span>
+                </div>
             </div>
             {entries.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Scores will appear after the first service-user turn.</p>

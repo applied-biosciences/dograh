@@ -63,6 +63,7 @@ export default function SakinahSimulationPage() {
     const [showScoringPanel, setShowScoringPanel] = useState(true);
     const [experimentMode, setExperimentMode] = useState<ExperimentMode>("full_calm_prompt");
     const [calmAnalysis, setCalmAnalysis] = useState<CalmAnalysis | null>(null);
+    const [calmHistory, setCalmHistory] = useState<CalmAnalysis[]>([]);
     const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
     const [audioStatus, setAudioStatus] = useState<SimulationAudioStatus>("idle");
     const [audioFrameCount, setAudioFrameCount] = useState(0);
@@ -152,7 +153,9 @@ export default function SakinahSimulationPage() {
             return;
         }
         if (event.type === "calm-analysis") {
-            setCalmAnalysis(event.payload as unknown as CalmAnalysis);
+            const analysis = event.payload as unknown as CalmAnalysis;
+            setCalmAnalysis(analysis);
+            setCalmHistory((previous) => [...previous, analysis]);
             return;
         }
         if (event.type === "pipeline-error" || event.type === "rtf-pipeline-error") {
@@ -357,6 +360,7 @@ export default function SakinahSimulationPage() {
         setError(null);
         setTurns([]);
         setCalmAnalysis(null);
+        setCalmHistory([]);
         try {
             if (!isAuthenticated) {
                 redirectToLogin();
@@ -631,7 +635,7 @@ export default function SakinahSimulationPage() {
                     </div>
                 </section>
             </div>
-            {showScoringPanel ? <div className="lg:ml-[calc(33.333%+0.5rem)]"><CalmScoringPanel analysis={calmAnalysis} /></div> : null}
+            {showScoringPanel ? <div className="lg:ml-[calc(33.333%+0.5rem)]"><CalmScoringPanel analysis={calmAnalysis} history={calmHistory} /></div> : null}
             <SakinahRunHistory refreshKey={historyRefreshKey} />
         </main>
     );

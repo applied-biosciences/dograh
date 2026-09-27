@@ -100,3 +100,21 @@ def test_live_calm_selection_uses_the_pinned_run_configuration():
     assert not is_sakinah_workflow(
         workflow, {"calm_scoring": {"enabled": False}}
     )
+
+
+def test_live_calm_selection_recognizes_a_renamed_pinned_sakinah_workflow():
+    workflow = SimpleNamespace(name="Monday inbound support", workflow_configurations={})
+    definition = SimpleNamespace(
+        workflow_json={
+            "nodes": [
+                {
+                    "type": "startCall",
+                    "data": {
+                        "prompt": "You are Sakinah, a compassionate voice-based clinical conversation partner."
+                    },
+                }
+            ]
+        }
+    )
+
+    assert is_sakinah_workflow(workflow, {}, definition)

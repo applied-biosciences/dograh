@@ -1086,7 +1086,7 @@ async def _run_pipeline_impl(
     if not calm_prompt_callback and not calm_response_callback:
         from api.services.sakinah.workflow import is_sakinah_workflow
 
-        if is_sakinah_workflow(workflow, run_configs):
+        if is_sakinah_workflow(workflow, run_configs, run_definition):
             from api.services.sakinah.calm.live_call import LiveCallCalmTracker
 
             calm_live_tracker = LiveCallCalmTracker(
@@ -1095,6 +1095,10 @@ async def _run_pipeline_impl(
                 user_config=user_config,
                 correlation_id=mps_correlation_id,
             )
+            # Match the simulation pipeline: compose Sakinah's CALM-guided
+            # next-turn prompt before generation, then snapshot it immediately
+            # for the authenticated live panel and Run Details view.
+            calm_prompt_callback = calm_live_tracker.prepare_generation_prompt
 
     if answer_supervisor is not None:
         answer_supervisor.bind(user_context_aggregator)

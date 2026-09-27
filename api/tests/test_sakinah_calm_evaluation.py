@@ -315,3 +315,73 @@ async def test_live_call_tracker_persists_each_role_turn_and_prompt(monkeypatch)
         "service_user",
         "sakinah",
     ]
+
+
+async def test_live_prompt_callback_persists_an_immediate_generation_history(monkeypatch):
+    """Live WebRTC/phone calls must not wait for evaluator latency to render."""
+    tracker = LiveCallCalmTracker(
+        workflow_run_id=72,
+        organization_id=17,
+        user_config=SimpleNamespace(),
+        correlation_id="correlation-72",
+    )
+    service_user = ServiceUserEvaluationResult(
+        **_service_user_payload(),
+        turn_id="service_user-1",
+        trend={},
+        evaluated_at="2026-09-27T12:00:01+00:00",
+    )
+    tracker._evaluator = AsyncMock()
+    evaluation_started = asyncio.Event()
+    allow_evaluation = asyncio.Event()
+
+    async def evaluate(**_kwargs):
+        evaluation_started.set()
+        await allow_evaluation.wait()
+        return service_user
+
+    tracker._evaluator.evaluate.side_effect = evaluate
+    database_write = AsyncMock(return_value=True)
+    object_write = AsyncMock(return_value={"status": "success"})
+    monkeypatch.setattr(
+        "api.services.sakinah.calm.live_call.db_client.update_call_calm_score_progress",
+        database_write,
+    )
+    monkeypatch.setattr(
+        "api.services.workflow_run_artifacts.persist_calm_score_snapshot",
+        object_write,
+    )
+
+    class Engine:
+        def __init__(self):
+            self.prompts = []
+
+        async def _update_llm_context(self, prompt, messages):
+            self.prompts.append((prompt, messages))
+
+    await tracker.record_turn("service_user", "I feel anxious and alone")
+    await evaluation_started.wait()
+    engine = Engine()
+    await tracker.prepare_generation_prompt(
+        engine,
+        SimpleNamespace(
+            messages=[{"role": "user", "content": "I feel anxious and alone"}]
+        ),
+    )
+    # The active call has a durable stripe before the evaluator is allowed to
+    # return, matching the long-running provider case that caused the blank UI.
+    await asyncio.sleep(0)
+    assert database_write.await_args.kwargs["calm_turns"][0]["scoring_method"] == "rule_based_calm"
+    allow_evaluation.set()
+    await tracker.flush()
+
+    assert engine.prompts and "CURRENT CALM STATE" in engine.prompts[0][0]
+    histories = [call.kwargs["calm_turns"] for call in database_write.await_args_list]
+    assert any(history[0].get("engineered_prompt") for history in histories)
+    final_history = histories[-1]
+    assert len(final_history) == 1
+    assert final_history[0]["scoring_method"] == "llm_evaluation"
+    # The evaluator refines the score but never replaces the prompt that was
+    # actually injected into the Sakinah generation context.
+    assert "CURRENT CALM STATE" in final_history[0]["engineered_prompt"]
+    assert object_write.await_count == 2

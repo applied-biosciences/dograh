@@ -1,5 +1,21 @@
 # Changelog
 
+## Sakinah v1.47.0.16 (2026-09-27)
+
+- Fixed the active-call CALM gap for Agent Run Tests, inbound WebRTC, and
+  incoming voice calls. The live generation pipeline now applies the same
+  CALM prompt processor as simulation and saves the numeric score plus the
+  exact next-turn Sakinah prompt before waiting for the independent evaluator.
+- Refined evaluator results replace the provisional score for the same turn
+  without losing the prompt that was actually delivered to Sakinah. PostgreSQL
+  remains queryable during the call and each revision is mirrored to immutable
+  MinIO objects with configured AWS S3 replication.
+- Added separate authenticated downloads for numeric score history and
+  engineered-prompt history in simulation, Agent Test, and Run Details.
+- Recognize renamed copies of the pinned Sakinah workflow for live CALM,
+  preserving the existing explicit configuration opt-in.
+- Bumped release metadata to `v1.47.0.16`.
+
 ## Sakinah v1.47.0.15 (2026-09-27)
 
 - Fixed the live CALM persistence gap for browser Agent Run Tests, inbound

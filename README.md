@@ -1,6 +1,6 @@
 # Dograh AI
 
-> **CALMOS Connect / Sakinah v1.47.0.15** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): browser Agent Run Tests, inbound WebRTC, incoming phone calls, and simulations retain an authenticated, per-turn CALM history while still active. Each score compares with its prior turn (`↑`, `=`, or `↓`); the detailed stripes include the corresponding engineered CALM prompt. The owner-authorized Run Details/history download is backed by PostgreSQL and immutable MinIO objects, with configured AWS S3-secondary replication. Prompt traces are never published through public recording/transcript URLs and never contain provider credentials.
+> **CALMOS Connect / Sakinah v1.47.0.16** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): browser Agent Run Tests, inbound WebRTC, incoming phone calls, and simulations write a numeric CALM score and the exact Sakinah next-turn engineered prompt while the call remains active. Separate owner-authorized score-history and prompt-history downloads are backed by PostgreSQL and immutable MinIO objects, with configured AWS S3-secondary replication. Prompt traces are never published through public recording/transcript URLs and never contain provider credentials.
 > **Deployment limitation**: run the API with a **single worker** (`FASTAPI_WORKERS=1`, the default). Simulations keep in-process state, so with multiple workers the simulation status/stop endpoints and the transcript/audio WebSockets intermittently land on a worker that doesn't own the simulation ([#4](https://github.com/applied-biosciences/dograh/issues/4)).
 
 <p align="center">
@@ -11,7 +11,7 @@
 
 **The open-source, self-hostable alternative to Vapi & Retell** — build production voice agents with a visual workflow builder, test them in minutes, and let AI coding assistants help design and edit them through MCP.
 
-> **Sakinah distribution:** this checkout packages the compatible `v1.47.0.15` release, based on upstream Dograh `dograh-v1.47.0`. Production images must be built for `linux/amd64`; deployment and local smoke-test instructions are maintained in the accompanying Sakinah deployment bundle.
+> **Sakinah distribution:** this checkout packages the compatible `v1.47.0.16` release, based on upstream Dograh `dograh-v1.47.0`. Production images must be built for `linux/amd64`; deployment and local smoke-test instructions are maintained in the accompanying Sakinah deployment bundle.
 
 <p align="center">
   <a href="https://app.dograh.com">

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { scoreOnlyHistoryExport, type CalmScoreTimeline } from './CalmScoreTimeline';
+import { engineeredPromptHistoryExport, scoreOnlyHistoryExport, type CalmScoreTimeline } from './CalmScoreTimeline';
 
-describe('scoreOnlyHistoryExport', () => {
-    it('keeps numeric scores and the authenticated engineered prompt trace', () => {
+describe('CALM history exports', () => {
+    it('keeps numeric scores and engineered prompts in separate authorized files', () => {
         const timeline: CalmScoreTimeline = {
             session_id: 'run-99', status: 'running', roles: [{
                 role: 'sakinah', run_id: 99, workflow_id: 7, turns: [{
@@ -16,6 +16,7 @@ describe('scoreOnlyHistoryExport', () => {
         expect(serialized).toContain('"empathy":8');
         expect(serialized).not.toContain('never export me');
         expect(serialized).not.toContain('nor me');
-        expect(serialized).toContain('authorized prompt trace');
+        expect(serialized).not.toContain('authorized prompt trace');
+        expect(JSON.stringify(engineeredPromptHistoryExport(timeline))).toContain('authorized prompt trace');
     });
 });

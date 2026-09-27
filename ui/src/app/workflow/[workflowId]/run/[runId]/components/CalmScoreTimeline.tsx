@@ -28,8 +28,8 @@ export interface CalmScoreTimeline {
     }>;
 }
 
-/** Export only the authenticated CALM history projection, never Run Details. */
-export function calmHistoryExport(timeline: CalmScoreTimeline) {
+/** Export numeric CALM scores without unrelated Run Details content. */
+export function scoreHistoryExport(timeline: CalmScoreTimeline) {
     const numericEntries = (values: Record<string, number | string | null>) =>
         Object.fromEntries(
             Object.entries(values).filter(([, value]) => typeof value === 'number' && Number.isFinite(value)),
@@ -50,19 +50,50 @@ export function calmHistoryExport(timeline: CalmScoreTimeline) {
                 scored_at: turn.scored_at,
                 scores: numericEntries(turn.scores),
                 confidence: numericEntries(turn.confidence),
-                engineered_prompt: turn.engineered_prompt,
             })),
         })),
     };
 }
 
+/** Export the owner-authorized Sakinah prompt trace separately from scores. */
+export function engineeredPromptHistoryExport(timeline: CalmScoreTimeline) {
+    return {
+        artifact_kind: 'dograh-sakinah-engineered-prompt-history/v1',
+        exported_at: new Date().toISOString(),
+        session_id: timeline.session_id,
+        status: timeline.status,
+        roles: timeline.roles.map((role) => ({
+            role: role.role,
+            run_id: role.run_id,
+            workflow_id: role.workflow_id,
+            turns: role.turns
+                .filter((turn) => Boolean(turn.engineered_prompt))
+                .map((turn) => ({
+                    turn_id: turn.turn_id,
+                    turn_index: turn.turn_index,
+                    scoring_method: turn.scoring_method,
+                    scored_at: turn.scored_at,
+                    engineered_prompt: turn.engineered_prompt,
+                })),
+        })).filter((role) => role.turns.length > 0),
+    };
+}
+
 /** @deprecated Kept as a compatibility alias for existing embedded callers. */
-export const scoreOnlyHistoryExport = calmHistoryExport;
+export const scoreOnlyHistoryExport = scoreHistoryExport;
 
 export function downloadScoreOnlyHistory(timeline: CalmScoreTimeline) {
     downloadTextFile(
-        JSON.stringify(calmHistoryExport(timeline), null, 2),
+        JSON.stringify(scoreHistoryExport(timeline), null, 2),
         `calm-score-history-${timeline.session_id}.json`,
+        'application/json;charset=utf-8',
+    );
+}
+
+export function downloadEngineeredPromptHistory(timeline: CalmScoreTimeline) {
+    downloadTextFile(
+        JSON.stringify(engineeredPromptHistoryExport(timeline), null, 2),
+        `sakinah-engineered-prompt-history-${timeline.session_id}.json`,
         'application/json;charset=utf-8',
     );
 }
@@ -77,6 +108,7 @@ export function CalmScoreTimelineSection({
     emptyMessage?: string;
 }) {
     const rolesWithTurns = timeline.roles.filter((role) => role.turns.length > 0);
+    const hasPrompts = rolesWithTurns.some((role) => role.turns.some((turn) => Boolean(turn.engineered_prompt)));
 
     const roleLabel = (role: string) => role === 'sakinah' ? 'Sakinah' : 'Incoming caller / service user';
     const formatValue = (value: number | string | null | undefined) => value == null ? '—' : String(value);
@@ -94,10 +126,16 @@ export function CalmScoreTimelineSection({
             <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <CardTitle className="text-lg">{title}</CardTitle>
-                    <Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => downloadScoreOnlyHistory(timeline)} disabled={rolesWithTurns.length === 0}>
-                        <Download className="h-4 w-4" />
-                        Download score history
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                        <Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => downloadScoreOnlyHistory(timeline)} disabled={rolesWithTurns.length === 0}>
+                            <Download className="h-4 w-4" />
+                            Download score history
+                        </Button>
+                        <Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => downloadEngineeredPromptHistory(timeline)} disabled={!hasPrompts}>
+                            <Download className="h-4 w-4" />
+                            Download prompt history
+                        </Button>
+                    </div>
                 </div>
                 <p className="text-sm text-muted-foreground">
                     Ongoing authenticated score history for this call. Simulation roles remain on their native runs; ordinary calls keep both role tracks on this run.
