@@ -38,11 +38,15 @@ describe('CalmScoreTimelineSection', () => {
         expect(screen.getByTestId('calm-score-timeline')).toBeTruthy();
         expect(screen.getByText('Sakinah')).toBeTruthy();
         expect(screen.getByText('Incoming caller / service user')).toBeTruthy();
-        expect(screen.getByText('response_quality.empathy')).toBeTruthy();
-        expect(screen.getByText('anxiety')).toBeTruthy();
+        expect(screen.getAllByText('response_quality.empathy')).toHaveLength(2);
+        expect(screen.getAllByText('anxiety')).toHaveLength(3);
         expect(screen.getByText('↑ +2')).toBeTruthy();
         expect(screen.getByText('↓ -2')).toBeTruthy();
         expect(screen.getByText('= 0')).toBeTruthy();
+        expect(screen.getByTestId('calm-trajectory-sakinah').textContent).toContain('line: response_quality.empathy');
+        expect(screen.getByTestId('calm-trajectory-service_user').textContent).toContain('line: anxiety');
+        expect(screen.getByLabelText(/Sakinah CALM score trajectories.*Y-axis.*X-axis/i)).toBeTruthy();
+        expect(screen.getByLabelText(/Incoming caller.*CALM score trajectories.*Y-axis.*X-axis/i)).toBeTruthy();
         expect(screen.queryByText(/prompt_sent_to_llm/i)).toBeNull();
     });
 });
