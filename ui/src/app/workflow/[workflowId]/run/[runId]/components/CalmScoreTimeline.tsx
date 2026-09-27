@@ -100,8 +100,7 @@ export function downloadEngineeredPromptHistory(timeline: CalmScoreTimeline) {
 
 const trajectoryColours = ['#2563eb', '#dc2626', '#059669', '#d97706', '#9333ea', '#0891b2', '#db2777', '#65a30d'];
 
-function CalmTrajectoryGraph({ role, label, turns }: { role: string; label: string; turns: CalmScoreTurn[] }) {
-    const dimensions = Array.from(new Set(turns.flatMap((turn) => Object.keys(turn.scores))));
+function CalmTrajectoryGraph({ role, label, turns, category, dimensions }: { role: string; label: string; turns: CalmScoreTurn[]; category: 'safety' | 'emotional'; dimensions: string[] }) {
     if (turns.length === 0 || dimensions.length === 0) return null;
     const width = 920;
     const height = 300;
@@ -116,10 +115,10 @@ function CalmTrajectoryGraph({ role, label, turns }: { role: string; label: stri
     }).filter((point): point is string => point !== null).join(' ');
 
     return (
-        <div className="mt-5 rounded-md border border-border bg-background p-3" data-testid={`calm-trajectory-${role}`}>
-            <h4 className="mb-2 text-sm font-semibold">{label} score trajectories</h4>
+        <div className="mt-5 rounded-md border border-border bg-background p-3" data-testid={`calm-trajectory-${role}-${category}`}>
+            <h4 className="mb-2 text-sm font-semibold">{label} {category} score trajectories</h4>
             <div className="overflow-x-auto">
-                <svg viewBox={`0 0 ${width} ${height}`} className="h-auto min-w-[680px] w-full" role="img" aria-label={`${label} CALM score trajectories: score values 0 to 10 on the Y-axis and scored turns on the X-axis`}>
+                <svg viewBox={`0 0 ${width} ${height}`} className="h-auto min-w-[680px] w-full" role="img" aria-label={`${label} CALM score trajectories (${category}): score values 0 to 10 on the Y-axis and scored turns on the X-axis`}>
                     {[0, 2, 4, 6, 8, 10].map((tick) => (
                         <g key={tick}>
                             <line x1={margin.left} x2={width - margin.right} y1={y(tick)} y2={y(tick)} stroke="currentColor" className="text-border" strokeDasharray="3 3" />
@@ -244,7 +243,15 @@ export function CalmScoreTimelineSection({
                                 </details>
                             ))}
                         </div>
-                        <CalmTrajectoryGraph role={role.role} label={roleLabel(role.role)} turns={role.turns} />
+                        <div data-testid={`calm-trajectory-${role.role}`}>
+                            {(['safety', 'emotional'] as const).map((category) => {
+                                const dimensions = Array.from(new Set(role.turns.flatMap((turn) => Object.keys(turn.scores))))
+                                    .filter((dimension) => category === 'safety'
+                                        ? dimension.toLowerCase().startsWith('safety')
+                                        : !dimension.toLowerCase().startsWith('safety'));
+                                return <CalmTrajectoryGraph key={category} role={role.role} label={roleLabel(role.role)} turns={role.turns} category={category} dimensions={dimensions} />;
+                            })}
+                        </div>
                     </section>
                 ))}
             </CardContent>
