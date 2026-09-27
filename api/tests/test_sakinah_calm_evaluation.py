@@ -265,8 +265,8 @@ async def test_evaluation_llm_uses_pinned_run_configuration_without_lazy_loading
     )
 
 
-async def test_live_call_tracker_persists_each_role_turn_without_text(monkeypatch):
-    """The normal WebRTC/telephony path writes each completed score promptly."""
+async def test_live_call_tracker_persists_each_role_turn_and_prompt(monkeypatch):
+    """The normal WebRTC/telephony path writes every turn's CALM trace promptly."""
     tracker = LiveCallCalmTracker(
         workflow_run_id=71,
         organization_id=17,
@@ -307,8 +307,10 @@ async def test_live_call_tracker_persists_each_role_turn_without_text(monkeypatc
     assert object_write.await_count == 2
     stored_history = database_write.await_args.kwargs["calm_turns"]
     assert [turn["role"] for turn in stored_history] == ["service_user", "sakinah"]
-    assert "private caller utterance" not in str(stored_history)
-    assert "private Sakinah response" not in str(stored_history)
+    assert "private caller utterance" in str(stored_history)
+    assert "private Sakinah response" in str(stored_history)
+    assert all(turn.get("engineered_prompt") for turn in stored_history)
+    assert "system_instruction" in stored_history[-1]["engineered_prompt"]
     assert [call.kwargs["role"] for call in object_write.await_args_list] == [
         "service_user",
         "sakinah",

@@ -177,13 +177,14 @@ async def test_end_session_artifact_lookup_waits_for_pipeline_upload():
     assert delayed_lookup.await_count == 2
 
 
-def test_structured_call_scores_keep_speakers_in_separate_native_runs():
+def test_structured_call_scores_keep_speakers_and_authorized_prompts():
     calm_turns = [
         {
             "turn_id": "sakinah-turn",
             "role": "sakinah",
             "calm_scores": {"response_quality.empathy": 8},
             "calm_confidence": {"response_quality.empathy": 7},
+            "engineered_prompt": "authorized Sakinah prompt",
         },
         {
             "turn_id": "caller-turn",
@@ -206,12 +207,13 @@ def test_structured_call_scores_keep_speakers_in_separate_native_runs():
             "confidence": {"response_quality.empathy": 7},
             "trend": {},
             "significant_changes": {},
+            "engineered_prompt": "authorized Sakinah prompt",
         }
     ]
     assert caller["turns"][0]["turn_id"] == "caller-turn"
 
 
-async def test_run_details_exposes_paired_score_only_timeline_in_org(
+async def test_run_details_exposes_paired_score_and_prompt_timeline_in_org(
     test_client_factory, db_session
 ):
     """Either native run can present both simulation roles without transcripts."""
@@ -273,7 +275,7 @@ async def test_run_details_exposes_paired_score_only_timeline_in_org(
                 "calm_scores": {"response_quality.empathy": 9},
                 "calm_confidence": {"response_quality.empathy": 8},
                 "trend": {"response_quality.empathy": "stable"},
-                "prompt_sent_to_llm": "must not reach the details API",
+                "engineered_prompt": "authorized simulation prompt",
             },
             {
                 "turn_id": "caller-1",
@@ -302,7 +304,7 @@ async def test_run_details_exposes_paired_score_only_timeline_in_org(
         assert [turn["turn_index"] for turn in caller_turns] == [1, 2]
         assert caller_turns[0]["scores"] == {"anxiety_fear": 6}
         assert "utterance_verbatim" not in response.text
-        assert "prompt_sent_to_llm" not in response.text
+        assert "authorized simulation prompt" in response.text
 
         # A run ID is not sufficient to bypass either org or workflow scoping.
         wrong_workflow = await client.get(
@@ -355,7 +357,7 @@ async def test_normal_sakinah_run_persists_role_aware_score_timeline_in_org(
                 "scored_at": "2026-09-27T11:00:02+00:00",
                 "calm_scores": {"response_quality.empathy": 9},
                 "calm_confidence": {"response_quality.empathy": 8},
-                "prompt_sent_to_llm": "must not persist",
+                "engineered_prompt": "authorized live prompt",
             },
         ],
     )
@@ -370,7 +372,7 @@ async def test_normal_sakinah_run_persists_role_aware_score_timeline_in_org(
             "service_user",
         ]
         assert all(track["run_id"] == run.id for track in timeline["roles"])
-        assert "must not persist" not in response.text
+        assert "authorized live prompt" in response.text
 
     # The worker's organization-scoped write and the details endpoint both
     # refuse cross-tenant access to an otherwise valid run id.

@@ -6,12 +6,25 @@ WORKFLOW_NAME = "Sakinah Scenario Console"
 SERVICE_USER_WORKFLOW_NAME = "Sakinah Service User Simulator"
 
 
-def is_sakinah_workflow(workflow) -> bool:
-    """Whether the run is the Sakinah supporter agent, not its simulator peer."""
+def is_sakinah_workflow(workflow, configurations: dict | None = None) -> bool:
+    """Whether a pinned run should receive the live CALM tracker.
+
+    Agent Tests use the draft/pinned definition while inbound calls use the
+    published one.  Looking only at the mutable workflow-level configuration
+    misses a CALM toggle that exists solely on that run's definition.
+    """
     if getattr(workflow, "name", None) == WORKFLOW_NAME:
         return True
-    configurations = getattr(workflow, "workflow_configurations", None) or {}
-    calm = configurations.get("calm_scoring") if isinstance(configurations, dict) else None
+    effective_configurations = (
+        configurations
+        if isinstance(configurations, dict)
+        else getattr(workflow, "workflow_configurations", None) or {}
+    )
+    calm = (
+        effective_configurations.get("calm_scoring")
+        if isinstance(effective_configurations, dict)
+        else None
+    )
     return isinstance(calm, dict) and calm.get("enabled") is True
 
 # Superseded seed prompts, kept verbatim so ensure_* can recognize and

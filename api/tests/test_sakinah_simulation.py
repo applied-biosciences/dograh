@@ -28,6 +28,7 @@ from api.services.sakinah.simulation import (
     Simulation,
     SimulationAuthorizationError,
     SimulationManager,
+    _score_record_from_calm_turn,
     _simulation_workflow_configurations,
     simulation_manager,
 )
@@ -40,6 +41,20 @@ from api.services.sakinah.workflow import (
 )
 
 SCENARIO = "You are Amina, a 34-year-old feeling overwhelmed at work."
+
+
+def test_simulation_score_history_keeps_the_engineered_generation_prompt():
+    record = _score_record_from_calm_turn(
+        {
+            "turn_id": 1,
+            "calm_scores": {"anxiety": 8},
+            "calm_confidence": {"anxiety": 9},
+            "trend": {},
+            "prompt_sent_to_llm": "CALM NEXT-TURN GENERATION CONTEXT",
+        }
+    )
+
+    assert record["engineered_prompt"] == "CALM NEXT-TURN GENERATION CONTEXT"
 
 
 @pytest.mark.asyncio

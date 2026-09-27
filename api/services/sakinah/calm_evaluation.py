@@ -267,6 +267,30 @@ def _format_context(turns: Sequence[dict]) -> str:
     )
 
 
+def build_evaluation_input(
+    role: Literal["service_user", "sakinah"], turns: Sequence[dict]
+) -> tuple[list[dict[str, str]], str]:
+    """Build the exact bounded evaluation prompt for a completed live turn.
+
+    Callers that persist this material must keep it behind an authenticated,
+    organization-scoped API.  It contains the bounded conversation supplied to
+    the evaluator and is intentionally not a public call artifact.
+    """
+    user_message = (
+        "Bounded recent transcript (the final line is the turn to assess):\n\n"
+        + _format_context(turns)
+    )
+    if role == "service_user":
+        system_prompt = SERVICE_USER_PROMPT.format(
+            schema=json.dumps(ServiceUserAssessment.model_json_schema())
+        )
+    else:
+        system_prompt = SAKINAH_PROMPT.format(
+            schema=json.dumps(SakinahAssessment.model_json_schema())
+        )
+    return [{"role": "user", "content": user_message}], system_prompt
+
+
 async def run_llm_inference(
     llm, messages: list[dict], system_prompt: str
 ) -> str | None:
@@ -298,19 +322,11 @@ class CalmEvaluator:
         turn_id: str,
         turns: Sequence[dict],
     ) -> EvaluationResult:
-        user_message = (
-            "Bounded recent transcript (the final line is the turn to assess):\n\n"
-            + _format_context(turns)
-        )
+        messages, prompt = build_evaluation_input(role, turns)
         if role == "service_user":
             async with self._service_user_lock:
-                prompt = SERVICE_USER_PROMPT.format(
-                    schema=json.dumps(ServiceUserAssessment.model_json_schema())
-                )
                 raw = await asyncio.wait_for(
-                    self._inference(
-                        [{"role": "user", "content": user_message}], prompt
-                    ),
+                    self._inference(messages, prompt),
                     timeout=EVALUATION_TIMEOUT_SECONDS,
                 )
                 if not raw:
@@ -327,11 +343,8 @@ class CalmEvaluator:
                     evaluated_at=datetime.now(UTC).isoformat(),
                 )
 
-        prompt = SAKINAH_PROMPT.format(
-            schema=json.dumps(SakinahAssessment.model_json_schema())
-        )
         raw = await asyncio.wait_for(
-            self._inference([{"role": "user", "content": user_message}], prompt),
+            self._inference(messages, prompt),
             timeout=EVALUATION_TIMEOUT_SECONDS,
         )
         if not raw:
@@ -352,6 +365,7 @@ __all__ = [
     "ServiceUserAssessment",
     "ServiceUserEvaluationResult",
     "ValidationError",
+    "build_evaluation_input",
     "calculate_service_user_trends",
     "calculate_trend",
     "parse_sakinah_evaluation",

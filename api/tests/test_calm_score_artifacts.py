@@ -1,4 +1,4 @@
-"""Regression tests for the content-minimized CALM object contract."""
+"""Regression tests for the authorized CALM object-history contract."""
 
 import json
 from types import SimpleNamespace
@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from api.services import workflow_run_artifacts
 
 
-async def test_calm_snapshot_is_score_only_and_replicated(monkeypatch):
+async def test_calm_snapshot_keeps_authorized_prompt_and_is_replicated(monkeypatch):
     written: dict[str, object] = {}
 
     async def get_run(_run_id):
@@ -30,9 +30,11 @@ async def test_calm_snapshot_is_score_only_and_replicated(monkeypatch):
         "turn_id": "sakinah-1", "role": "sakinah", "scoring_method": "llm_evaluation", "scored_at": "2026-09-27T12:00:00Z",
         "calm_scores": {"response_quality.empathy": 8}, "calm_confidence": {"response_quality.empathy": 9},
         "trend": {"response_quality.empathy": "improving"}, "private_utterance": "must not be written", "prompt": "must not be written", "api_key": "must not be written",
+        "engineered_prompt": "authorized evaluation trace",
     }], role="sakinah")
     assert result["status"] == "success"
     assert written["object_key"] == "scores/workflow-run-31/calm-sakinah-turn-sakinah-1.json"
     assert "must not be written" not in json.dumps(written["payload"])
-    assert written["payload"]["artifact_kind"] == "dograh-calm-score-snapshot/v1"
+    assert written["payload"]["artifact_kind"] == "dograh-calm-turn-history/v2"
     assert written["payload"]["scored_at"] == "2026-09-27T12:00:00Z"
+    assert written["payload"]["engineered_prompt"] == "authorized evaluation trace"

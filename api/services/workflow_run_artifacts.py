@@ -335,15 +335,17 @@ async def persist_calm_score_snapshot(
     """Persist an immutable, content-minimized in-progress CALM score snapshot.
 
     PostgreSQL remains the queryable source of truth. This object copy makes
-    each completed score turn available in MinIO and, when configured, S3.
-    Utterances, prompts, and generated responses are deliberately excluded.
+    each completed authorized CALM turn available in MinIO and, when
+    configured, S3.  The engineered evaluator prompt is preserved alongside
+    its scores for support/audit replay; raw call audio and provider secrets
+    remain excluded.
     """
     run = await db_client.get_workflow_run_by_id(workflow_run_id)
     if run is None or not calm_turns:
         return {"status": "not_expected"}
     last_turn = calm_turns[-1]
     score_data = {
-        "artifact_kind": "dograh-calm-score-snapshot/v1",
+        "artifact_kind": "dograh-calm-turn-history/v2",
         "workflow_run_id": workflow_run_id,
         "turn_id": last_turn.get("turn_id"),
         "role": last_turn.get("role") or role,
@@ -354,6 +356,8 @@ async def persist_calm_score_snapshot(
         "trend": last_turn.get("trend") or {},
         "significant_changes": last_turn.get("significant_changes") or {},
     }
+    if isinstance(last_turn.get("engineered_prompt"), str):
+        score_data["engineered_prompt"] = last_turn["engineered_prompt"]
     payload = json.dumps(score_data, sort_keys=True, separators=(",", ":")).encode()
     storage_backend = get_current_storage_backend()
     raw_turn_id = last_turn.get("turn_id") or len(calm_turns)

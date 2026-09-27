@@ -45,7 +45,11 @@ def _structured_call_scores(
     calm_turns: list[dict[str, Any]] | None,
     role: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    """Project CALM turns without copying prompts or transcript text."""
+    """Project CALM turns into the authenticated, organization-scoped store.
+
+    ``engineered_prompt`` is an explicit release diagnostic: it is retained for
+    an authorized Run Details view and history export, never public artifacts.
+    """
     calm: list[dict[str, Any]] = []
     safety: list[dict[str, Any]] = []
     clinical: list[dict[str, Any]] = []
@@ -56,18 +60,19 @@ def _structured_call_scores(
         if role is not None and turn_role != role:
             continue
         turn_id = turn.get("turn_id")
-        calm.append(
-            {
-                "turn_id": turn_id,
-                "role": turn_role,
-                "scoring_method": turn.get("scoring_method") or "unknown",
-                "scored_at": turn.get("scored_at"),
-                "scores": turn.get("calm_scores") or {},
-                "confidence": turn.get("calm_confidence") or {},
-                "trend": turn.get("trend") or {},
-                "significant_changes": turn.get("significant_changes") or {},
-            }
-        )
+        projected = {
+            "turn_id": turn_id,
+            "role": turn_role,
+            "scoring_method": turn.get("scoring_method") or "unknown",
+            "scored_at": turn.get("scored_at"),
+            "scores": turn.get("calm_scores") or {},
+            "confidence": turn.get("calm_confidence") or {},
+            "trend": turn.get("trend") or {},
+            "significant_changes": turn.get("significant_changes") or {},
+        }
+        if isinstance(turn.get("engineered_prompt"), str):
+            projected["engineered_prompt"] = turn["engineered_prompt"]
+        calm.append(projected)
         safety.append(
             {
                 "turn_id": turn_id,
@@ -86,12 +91,11 @@ def _structured_call_scores(
 
 
 def _timeline_turns(call_score: CallScoreModel | None) -> list[dict[str, Any]]:
-    """Return a presentation-safe, chronologically stable score timeline.
+    """Return a chronologically stable authorized CALM turn timeline.
 
-    ``CallScoreModel`` is intentionally score-only.  Do not add utterances,
-    prompts, evidence spans, or free-text clinical summaries to this response:
-    the Run Details endpoint must remain safe to display and cache in the
-    authenticated dashboard.
+    The caller must have already passed the Run Details organization check.
+    Engineered evaluator prompts are included solely for that authenticated
+    dashboard/export path; public artifact links never expose them.
     """
     if call_score is None or not isinstance(call_score.calm_score, dict):
         return []
@@ -107,19 +111,20 @@ def _timeline_turns(call_score: CallScoreModel | None) -> list[dict[str, Any]]:
         confidence = raw_turn.get("confidence") or raw_turn.get("calm_confidence") or {}
         if not isinstance(scores, dict) or not isinstance(confidence, dict):
             continue
-        turns.append(
-            {
-                "turn_id": raw_turn.get("turn_id"),
-                "role": raw_turn.get("role"),
-                "scoring_method": raw_turn.get("scoring_method") or "unknown",
-                "scored_at": raw_turn.get("scored_at"),
-                "scores": scores,
-                "confidence": confidence,
-                "trend": raw_turn.get("trend") or {},
-                "significant_changes": raw_turn.get("significant_changes") or {},
-                "_position": position,
-            }
-        )
+        turn = {
+            "turn_id": raw_turn.get("turn_id"),
+            "role": raw_turn.get("role"),
+            "scoring_method": raw_turn.get("scoring_method") or "unknown",
+            "scored_at": raw_turn.get("scored_at"),
+            "scores": scores,
+            "confidence": confidence,
+            "trend": raw_turn.get("trend") or {},
+            "significant_changes": raw_turn.get("significant_changes") or {},
+            "_position": position,
+        }
+        if isinstance(raw_turn.get("engineered_prompt"), str):
+            turn["engineered_prompt"] = raw_turn["engineered_prompt"]
+        turns.append(turn)
 
     # ISO-8601 strings sort chronologically.  Preserve write order for older
     # snapshots that predate scored_at, and number only after ordering.

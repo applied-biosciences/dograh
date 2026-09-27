@@ -1,27 +1,34 @@
-"""Asynchronous, score-only CALM persistence for ordinary Sakinah calls.
+"""Asynchronous CALM turn-history persistence for ordinary Sakinah calls.
 
 This module deliberately receives final turn text only in process.  Its
-durable records contain numeric scores and metadata, never a transcript,
-prompt, response, or provider credential.
+durable history holds numeric scores plus the exact evaluator prompt for the
+authorized owner; it never stores a provider credential.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from loguru import logger
 
 from api.db import db_client
-from api.services.sakinah.calm_evaluation import CalmEvaluator, run_llm_inference
+from api.services.sakinah.calm_evaluation import (
+    CalmEvaluator,
+    build_evaluation_input,
+    run_llm_inference,
+)
 
 SAKINAH_ROLE = "sakinah"
 SERVICE_USER_ROLE = "service_user"
 
 
-def score_record_from_evaluation(result: Any) -> dict[str, Any]:
-    """Project an evaluator result onto the public score-only contract."""
+def score_record_from_evaluation(
+    result: Any, *, engineered_prompt: str | None = None
+) -> dict[str, Any]:
+    """Project an evaluator result onto the authorized turn-history contract."""
     payload = result.model_dump(mode="json")
     role = payload.get("role")
     score_fields = (
@@ -46,7 +53,7 @@ def score_record_from_evaluation(result: Any) -> dict[str, Any]:
 
     for field in score_fields:
         collect(payload.get(field), (field,))
-    return {
+    record = {
         "role": role,
         "turn_id": payload.get("turn_id"),
         "scoring_method": "llm_evaluation",
@@ -55,6 +62,9 @@ def score_record_from_evaluation(result: Any) -> dict[str, Any]:
         "trend": payload.get("trend") or {},
         "scored_at": payload.get("evaluated_at") or datetime.now(UTC).isoformat(),
     }
+    if engineered_prompt:
+        record["engineered_prompt"] = engineered_prompt
+    return record
 
 
 class LiveCallCalmTracker:
@@ -121,10 +131,21 @@ class LiveCallCalmTracker:
         turns: list[dict],
     ) -> None:
         try:
+            messages, system_prompt = build_evaluation_input(role, turns)
+            # This is the exact per-turn evaluator input, retained only in the
+            # authenticated organization-scoped history.  Keeping both pieces
+            # makes an active-test stripe auditable without exposing it through
+            # public recording or transcript links.
+            engineered_prompt = json.dumps(
+                {"messages": messages, "system_instruction": system_prompt},
+                separators=(",", ":"),
+            )
             result = await self._evaluator.evaluate(
                 role=role, turn_id=turn_id, turns=turns
             )
-            score_turn = score_record_from_evaluation(result)
+            score_turn = score_record_from_evaluation(
+                result, engineered_prompt=engineered_prompt
+            )
             async with self._persistence_lock:
                 self.score_turns.append(score_turn)
                 # Postgres is the queryable current history.  The object write
@@ -140,7 +161,9 @@ class LiveCallCalmTracker:
                         self.workflow_run_id,
                     )
                     return
-                from api.services.workflow_run_artifacts import persist_calm_score_snapshot
+                from api.services.workflow_run_artifacts import (
+                    persist_calm_score_snapshot,
+                )
 
                 await persist_calm_score_snapshot(
                     self.workflow_run_id,

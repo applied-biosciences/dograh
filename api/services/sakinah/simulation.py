@@ -6,6 +6,7 @@ pair; transcript events stream to browsers over a per-simulation event feed.
 """
 
 import asyncio
+import json
 import uuid
 from collections import deque
 from datetime import UTC, datetime
@@ -24,7 +25,11 @@ from api.services.pipecat.ws_sender_registry import (
 )
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.sakinah.calm.runtime import EXPERIMENT_MODES, CalmSimulationRuntime
-from api.services.sakinah.calm_evaluation import CalmEvaluator, run_llm_inference
+from api.services.sakinah.calm_evaluation import (
+    CalmEvaluator,
+    build_evaluation_input,
+    run_llm_inference,
+)
 from api.services.sakinah.internal_transport import (
     InternalTransport,
     create_internal_transport_pair,
@@ -77,8 +82,10 @@ def _simulation_workflow_configurations(workflow, definition) -> dict:
     return workflow_config if isinstance(workflow_config, dict) else {}
 
 
-def _score_record_from_evaluation(result: Any) -> dict[str, Any]:
-    """Keep only role-labelled numeric evaluation output for durable storage."""
+def _score_record_from_evaluation(
+    result: Any, *, engineered_prompt: str | None = None
+) -> dict[str, Any]:
+    """Keep role-labelled scores and the authorized evaluator prompt trace."""
     payload = result.model_dump(mode="json")
     role = payload.get("role")
     score_fields = (
@@ -103,7 +110,7 @@ def _score_record_from_evaluation(result: Any) -> dict[str, Any]:
 
     for field in score_fields:
         collect(payload.get(field), (field,))
-    return {
+    record = {
         "role": role,
         "turn_id": payload.get("turn_id"),
         "scoring_method": "llm_evaluation",
@@ -112,10 +119,13 @@ def _score_record_from_evaluation(result: Any) -> dict[str, Any]:
         "trend": payload.get("trend") or {},
         "scored_at": payload.get("evaluated_at") or datetime.now(UTC).isoformat(),
     }
+    if engineered_prompt:
+        record["engineered_prompt"] = engineered_prompt
+    return record
 
 
 def _score_record_from_calm_turn(turn: dict[str, Any]) -> dict[str, Any]:
-    """Project caller CALM values to score-only fields, excluding transcript text."""
+    """Project a CALM-controlled generation turn for durable history."""
     raw_trend = turn.get("trend") or {}
     parameters = raw_trend.get("parameters") or {}
     trend = {
@@ -134,7 +144,7 @@ def _score_record_from_calm_turn(turn: dict[str, Any]) -> dict[str, Any]:
             if isinstance(value, dict)
         }
     }
-    return {
+    record = {
         "role": SERVICE_USER_ROLE,
         "turn_id": turn.get("turn_id"),
         "scoring_method": "rule_based_calm",
@@ -143,6 +153,9 @@ def _score_record_from_calm_turn(turn: dict[str, Any]) -> dict[str, Any]:
         "trend": trend,
         "scored_at": datetime.now(UTC).isoformat(),
     }
+    if isinstance(turn.get("prompt_sent_to_llm"), str):
+        record["engineered_prompt"] = turn["prompt_sent_to_llm"]
+    return record
 
 
 class SimulationAuthorizationError(Exception):
@@ -624,8 +637,8 @@ class SimulationManager:
 
             # A running simulation must not hold CALM state only in process
             # memory: it is needed by the authorized Run Details view after a
-            # reconnect or worker restart. Store structured scores only, not
-            # the prompt/transcript that produced them. Each destination is
+            # reconnect or worker restart. Store structured scores and the
+            # engineered generation prompt in the authenticated history. Each destination is
             # best-effort and independent so one failing store cannot suppress
             # the others or the UI event above.
             score_turn = _score_record_from_calm_turn(turn)
@@ -759,6 +772,11 @@ class SimulationManager:
         try:
             if simulation.evaluator is None:
                 raise RuntimeError("CALM evaluator is unavailable")
+            messages, system_prompt = build_evaluation_input(role, turns)
+            engineered_prompt = json.dumps(
+                {"messages": messages, "system_instruction": system_prompt},
+                separators=(",", ":"),
+            )
             result = await simulation.evaluator.evaluate(
                 role=role,
                 turn_id=turn_id,
@@ -793,7 +811,9 @@ class SimulationManager:
             }
         )
         if payload["status"] == "completed" and payload["result"] is not None:
-            score_turn = _score_record_from_evaluation(result)
+            score_turn = _score_record_from_evaluation(
+                result, engineered_prompt=engineered_prompt
+            )
             simulation.calm_score_turns.append(score_turn)
             await self._persist_role_score_turn(simulation, score_turn)
 

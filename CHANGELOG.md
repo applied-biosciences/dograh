@@ -1,5 +1,20 @@
 # Changelog
 
+## Sakinah v1.47.0.15 (2026-09-27)
+
+- Fixed the live CALM persistence gap for browser Agent Run Tests, inbound
+  WebRTC, and incoming voice calls: every completed role turn now records its
+  numeric score history and exact engineered evaluator prompt while the call
+  remains active.
+- Persisted the same authorized prompt trace for simulation score turns.
+  PostgreSQL is queryable during the run; each immutable MinIO turn-history
+  object is queued for the existing configured AWS S3-secondary replica.
+- Expanded the authenticated Agent Test and bottom-of-Run-Details turn stripes
+  and history download to include engineered prompts alongside numerical
+  score/confidence values and prior-turn deltas (`↑`, `=`, `↓`). Public
+  recording and transcript links do not expose prompt traces.
+- Bumped release metadata to `v1.47.0.15`.
+
 ## Sakinah v1.47.0.14 (2026-09-27)
 
 - Added live authenticated CALM score histories for browser Agent Run Tests,

@@ -8,6 +8,7 @@ from api.services.sakinah.workflow import (
     WORKFLOW_NAME,
     ensure_sakinah_workflow,
     ensure_service_user_workflow,
+    is_sakinah_workflow,
 )
 
 
@@ -87,4 +88,15 @@ async def test_seed_selection_prefers_the_configured_voice_duplicate(
         selected.released_definition.workflow_configurations
         ["model_configuration_v2_override"]["byok"]["pipeline"]["tts"]["voice"]
         == voice
+    )
+
+
+def test_live_calm_selection_uses_the_pinned_run_configuration():
+    workflow = SimpleNamespace(name="Ordinary support agent", workflow_configurations={})
+
+    assert is_sakinah_workflow(
+        workflow, {"calm_scoring": {"enabled": True}}
+    )
+    assert not is_sakinah_workflow(
+        workflow, {"calm_scoring": {"enabled": False}}
     )

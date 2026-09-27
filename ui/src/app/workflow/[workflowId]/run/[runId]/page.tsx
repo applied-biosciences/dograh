@@ -41,7 +41,7 @@ import { formatDateTime } from '@/lib/dateTime';
 import { downloadFile, downloadTextFile, getSignedUrl } from '@/lib/files';
 import { cn } from '@/lib/utils';
 
-import { CalmScoreTimelineSection, type CalmScoreTimeline } from './components/CalmScoreTimeline';
+import { type CalmScoreTimeline,CalmScoreTimelineSection } from './components/CalmScoreTimeline';
 
 type StorageStatus = 'verified' | 'missing' | 'pending' | 'not_expected' | 'not_configured' | 'unknown';
 
@@ -799,7 +799,7 @@ export default function WorkflowRunPage() {
     }, [params.workflowId, params.runId, auth]);
 
     // Phone callers have no signaling WebSocket into Run Details. Refresh the
-    // same authorized score-only timeline while an inbound call remains live.
+    // same authorized CALM timeline and prompt trace while an inbound call is live.
     useEffect(() => {
         if (!auth.isAuthenticated || auth.loading || !workflowRun || workflowRun.is_completed) return;
         const workflowId = Number(params.workflowId);

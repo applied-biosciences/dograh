@@ -1086,7 +1086,7 @@ async def _run_pipeline_impl(
     if not calm_prompt_callback and not calm_response_callback:
         from api.services.sakinah.workflow import is_sakinah_workflow
 
-        if is_sakinah_workflow(workflow):
+        if is_sakinah_workflow(workflow, run_configs):
             from api.services.sakinah.calm.live_call import LiveCallCalmTracker
 
             calm_live_tracker = LiveCallCalmTracker(

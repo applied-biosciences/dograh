@@ -13,6 +13,8 @@ export interface CalmScoreTurn {
     confidence: Record<string, number | string | null>;
     trend: Record<string, unknown>;
     significant_changes: Record<string, unknown>;
+    /** Present only on the authenticated Run Details / Agent Test contract. */
+    engineered_prompt?: string;
 }
 
 export interface CalmScoreTimeline {
@@ -26,8 +28,8 @@ export interface CalmScoreTimeline {
     }>;
 }
 
-/** Never serialize a complete Run Details response for a score export. */
-export function scoreOnlyHistoryExport(timeline: CalmScoreTimeline) {
+/** Export only the authenticated CALM history projection, never Run Details. */
+export function calmHistoryExport(timeline: CalmScoreTimeline) {
     const numericEntries = (values: Record<string, number | string | null>) =>
         Object.fromEntries(
             Object.entries(values).filter(([, value]) => typeof value === 'number' && Number.isFinite(value)),
@@ -48,14 +50,18 @@ export function scoreOnlyHistoryExport(timeline: CalmScoreTimeline) {
                 scored_at: turn.scored_at,
                 scores: numericEntries(turn.scores),
                 confidence: numericEntries(turn.confidence),
+                engineered_prompt: turn.engineered_prompt,
             })),
         })),
     };
 }
 
+/** @deprecated Kept as a compatibility alias for existing embedded callers. */
+export const scoreOnlyHistoryExport = calmHistoryExport;
+
 export function downloadScoreOnlyHistory(timeline: CalmScoreTimeline) {
     downloadTextFile(
-        JSON.stringify(scoreOnlyHistoryExport(timeline), null, 2),
+        JSON.stringify(calmHistoryExport(timeline), null, 2),
         `calm-score-history-${timeline.session_id}.json`,
         'application/json;charset=utf-8',
     );
@@ -94,7 +100,7 @@ export function CalmScoreTimelineSection({
                     </Button>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                    Ongoing score-only snapshots for this call. Simulation roles remain on their native runs; ordinary calls keep both role tracks on this run.
+                    Ongoing authenticated score history for this call. Simulation roles remain on their native runs; ordinary calls keep both role tracks on this run.
                 </p>
             </CardHeader>
             <CardContent className="space-y-5">
@@ -109,7 +115,7 @@ export function CalmScoreTimelineSection({
                         </div>
                         <div className="space-y-3">
                             {role.turns.map((turn, index) => (
-                                <details key={`${role.role}-${turn.turn_id ?? turn.turn_index}`} className="rounded-md border border-border bg-background px-3 py-2" open={role.turns.length === 1}>
+                                <details key={`${role.role}-${turn.turn_id ?? turn.turn_index}`} className="rounded-md border border-border bg-background px-3 py-2" open>
                                     <summary className="cursor-pointer list-none pr-6 text-sm">
                                         <span className="font-medium">Turn {turn.turn_index}</span>
                                         <span className="ml-2 text-muted-foreground">{turn.scoring_method.replaceAll('_', ' ')}</span>
@@ -137,6 +143,14 @@ export function CalmScoreTimelineSection({
                                             </tbody>
                                         </table>
                                     </div>
+                                    {turn.engineered_prompt && (
+                                        <div className="mt-3 rounded-md border border-primary/20 bg-primary/5 p-3">
+                                            <p className="mb-2 text-xs font-medium text-foreground">Engineered CALM prompt</p>
+                                            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground">
+                                                {turn.engineered_prompt}
+                                            </pre>
+                                        </div>
+                                    )}
                                 </details>
                             ))}
                         </div>

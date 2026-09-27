@@ -14,8 +14,8 @@ import { Button } from "@/components/ui/button";
 import { RealtimeFeedback } from "@/components/workflow/conversation";
 import { copyTextToClipboard } from "@/lib/clipboard";
 
-import { CalmScoreTimelineSection, type CalmScoreTimeline } from "../../run/[runId]/components/CalmScoreTimeline";
 import { ApiKeyErrorDialog, ConnectionStatus, WorkflowConfigErrorDialog } from "../../run/[runId]/components";
+import { type CalmScoreTimeline,CalmScoreTimelineSection } from "../../run/[runId]/components/CalmScoreTimeline";
 import { useWebSocketRTC } from "../../run/[runId]/hooks";
 import type { WorkflowRuntimeNodeTransition } from "./types";
 
@@ -127,7 +127,7 @@ export function EmbeddedVoiceTester({
     const [calmTimeline, setCalmTimeline] = useState<CalmScoreTimeline | null>(null);
 
     // Browser Agent Run Tests and inbound WebRTC share the authenticated,
-    // persisted Run Details contract; no call text crosses this score panel.
+    // persisted Run Details contract, including the per-turn CALM prompt trace.
     useEffect(() => {
         if (!connectionActive && !isCompleted) return;
         let cancelled = false;
@@ -290,7 +290,7 @@ export function EmbeddedVoiceTester({
                         <CalmScoreTimelineSection
                             timeline={calmTimeline ?? { session_id: String(workflowRunId), status: connectionActive ? 'running' : 'completed', roles: [] }}
                             title="Live CALM scores"
-                            emptyMessage="Waiting for the first completed score turn. Scores are saved incrementally without call text."
+                            emptyMessage="Waiting for the first completed score turn. Scores and the authorized CALM prompt trace are saved incrementally."
                         />
                     </div>
                 )}
