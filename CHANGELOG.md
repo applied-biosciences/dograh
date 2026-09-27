@@ -11,6 +11,12 @@
 - Published each live CALM analysis event before best-effort persistence, and
   isolated PostgreSQL/MinIO failures so a storage error cannot hide scoring
   from the active simulation panel or stop Sakinah's prompt update.
+- Made simulation seeding deterministic when an organization has duplicate
+  seeded workflow names: prefer the newest definition with an explicit TTS
+  voice override. Production logs showed Service User workflow 18/definition 28
+  had no voice override and fell back to organization OpenAI `alloy`, while a
+  duplicate configured Service User workflow existed; the configured workflow
+  is now selected instead of depending on unordered database results.
 - Kept ongoing CALM scores in Dograh PostgreSQL and score-only MinIO objects,
   with the configured AWS S3 secondary replication path. The Dograh database
   must only be pointed at an RDS instance provisioned for Dograh; the existing
