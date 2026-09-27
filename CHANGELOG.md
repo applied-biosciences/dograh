@@ -1,5 +1,11 @@
 # Changelog
 
+## Sakinah v1.47.0.18 (2026-09-27)
+
+- Added a workflow settings toggle for `calm_scoring.enabled`.
+- Restored full-agent ZIP export containing the agent JSON, workflow layout/definition, and export notes.
+- Kept CALM trajectory graphs and distinct line markers visible in Run Details.
+
 ## Sakinah v1.47.0.17 (2026-09-27)
 
 - Added end-of-call CALM score trajectory graphs to Run Details, with separate incoming caller/service-user and Sakinah panels, score-name legends, y-axis score ticks, and x-axis turn ticks.

@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/popover";
 import { useSidebar } from "@/components/ui/sidebar";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { zipSync, strToU8 } from "fflate";
 
 interface WorkflowEditorHeaderProps {
     workflowName: string;
@@ -165,6 +166,29 @@ export const WorkflowEditorHeader = ({
         const link = document.createElement("a");
         link.href = url;
         link.download = `${workflowName}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    };
+
+    const handleDownloadWorkflowZip = () => {
+        if (!rfInstance.current) return;
+        const workflowDefinition = rfInstance.current.toObject();
+        const exportData = {
+            name: workflowName,
+            workflow_definition: workflowDefinition,
+        };
+        const archive = zipSync({
+            "agent.json": strToU8(JSON.stringify(exportData, null, 2)),
+            "workflow-definition.json": strToU8(JSON.stringify(workflowDefinition, null, 2)),
+            "README.txt": strToU8(`Agent export: ${workflowName}\n\nagent.json contains the complete agent export.\nworkflow-definition.json contains the React Flow layout and definition.\n`),
+        });
+        const blob = new Blob([archive], { type: "application/zip" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${workflowName}.zip`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -484,6 +508,13 @@ export const WorkflowEditorHeader = ({
                         >
                             <Download className="w-4 h-4 mr-2" />
                             Download Workflow
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                            onClick={handleDownloadWorkflowZip}
+                            className="text-white hover:bg-[#2a2a2a] cursor-pointer"
+                        >
+                            <Download className="w-4 h-4 mr-2" />
+                            Download Full Agent ZIP
                         </DropdownMenuItem>
                         <DropdownMenuItem
                             onClick={handleCopyAgentUuid}

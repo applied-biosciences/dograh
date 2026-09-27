@@ -155,6 +155,7 @@ type WorkflowConfigurationBase = Omit<
 >;
 
 export type WorkflowConfigurations = WorkflowConfigurationBase & {
+    calm_scoring?: { enabled?: boolean; [key: string]: unknown };
     ambient_noise_configuration: AmbientNoiseConfiguration;
     max_call_duration: number;  // Maximum call duration in seconds
     max_user_idle_timeout: number;  // Maximum user idle time in seconds
