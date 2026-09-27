@@ -75,9 +75,15 @@ class S3FileSystem(BaseFileSystem):
             # A custom endpoint may be an S3-compatible service rather than
             # AWS. Do not send AWS KMS headers there by default; operators can
             # opt into a compatible server-side encryption value explicitly.
+            # Let the bucket's default encryption control normal AWS uploads.
+            # Sending ``aws:kms`` without a named CMK can require a KMS grant
+            # that the S3 bucket policy deliberately does not provide.  An
+            # explicit CMK remains an opt-in override; AES256 is safe for
+            # compatible endpoints that require it.
             if S3_SERVER_SIDE_ENCRYPTION and (
-                not self.endpoint_url
-                or S3_SERVER_SIDE_ENCRYPTION != "aws:kms"
+                S3_SERVER_SIDE_ENCRYPTION != "aws:kms" or S3_KMS_KEY_ID
+            ) and not (
+                self.endpoint_url and S3_SERVER_SIDE_ENCRYPTION == "aws:kms"
             ):
                 put_kwargs["ServerSideEncryption"] = S3_SERVER_SIDE_ENCRYPTION
             if S3_KMS_KEY_ID and not self.endpoint_url:
