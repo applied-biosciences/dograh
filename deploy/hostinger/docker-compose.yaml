@@ -151,7 +151,15 @@ services:
       DATABASE_URL: "postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/postgres"
       REDIS_URL: "redis://:${REDIS_PASSWORD:-redissecret}@redis:6379"
 
-      ENABLE_AWS_S3: "false"
+      # Keep MinIO available for legacy artifacts, but do not hard-code it as
+      # the active backend. Existing deployments can switch primary artifact
+      # storage to private AWS S3 entirely through deploy/hostinger/.env.
+      ENABLE_AWS_S3: "${ENABLE_AWS_S3:-false}"
+      ENABLE_AWS_S3_PRIMARY: "${ENABLE_AWS_S3_PRIMARY:-false}"
+      AWS_REGION: "${AWS_REGION:-eu-west-2}"
+      AWS_RECORDINGS_BUCKET: "${AWS_RECORDINGS_BUCKET:-}"
+      S3_KMS_KEY_ID: "${S3_KMS_KEY_ID:-}"
+      S3_SERVER_SIDE_ENCRYPTION: "${S3_SERVER_SIDE_ENCRYPTION:-aws:kms}"
       MINIO_ENDPOINT: "minio:9000"
       # Full public URL browsers use to fetch audio. Traefik routes
       # /voice-audio/ to minio:9000. This replaces the nginx sub_filter hack.
