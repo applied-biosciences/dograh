@@ -1186,6 +1186,12 @@
 
 * change pipecat to submodule & add github alerts ([a9a97ab](https://github.com/dograh-hq/dograh/commit/a9a97abefb7fee3d909b0111fdb65ff8cec8a530))
 * change pipecat to submodule & add github alerts ([6562963](https://github.com/dograh-hq/dograh/commit/6562963018c613c5439c1253374cef83e088d15d))
+# v1.47.0.24
+
+- Kept the live Sakinah CALM score table current in PostgreSQL on every persisted turn, including engineered prompts and final caller/Sakinah scoring data; the turn-by-turn JSON remains available in MinIO and is queued for AWS S3 replication.
+- Restored the Scenario Library “Download all scenarios” action, exporting a ZIP with one JSON file per scenario plus `scenarios.json`.
+- Restored HUMAIN Voice TTS with selectable voice IDs, added HUMAIN realtime STT, and added HUMAIN IQ LLM configuration with ALLAM 34B support.
+
 # v1.47.0.23
 
 - Added a CALM scoring switch to agent General settings, saved as `calm_scoring.enabled`.

@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, Pencil, Play, Plus, Search, Trash2, Upload } from "lucide-react";
+import { Copy, Download, Pencil, Play, Plus, Search, Trash2, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
@@ -23,7 +23,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/lib/auth";
 import {
     type BulkScenarioImportResponse,
-    deleteSakinahScenario, listSakinahScenarios, loadSakinahScenariosWithLegacyMigration,
+    buildSakinahScenariosZip, deleteSakinahScenario, listSakinahScenarios, loadSakinahScenariosWithLegacyMigration,
     saveSakinahScenario,
 } from "@/lib/sakinahPersistence";
 import {
@@ -122,6 +122,7 @@ export default function ScenarioLibraryPage() {
     const [deleting, setDeleting] = useState<Scenario | null>(null);
     const [importMessage, setImportMessage] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
+    const [downloading, setDownloading] = useState(false);
     const [bulkImportOpen, setBulkImportOpen] = useState(false);
     const [isAdmin, setIsAdmin] = useState(false);
     const [search, setSearch] = useState("");
@@ -238,8 +239,28 @@ export default function ScenarioLibraryPage() {
             .then(setScenarios)
             .catch((loadError) => setImportMessage(loadError instanceof Error ? loadError.message : "Unable to refresh scenarios."));
     };
+    const handleDownloadAll = async () => {
+        setDownloading(true);
+        try {
+            const allScenarios = await listSakinahScenarios("");
+            const blob = await buildSakinahScenariosZip(allScenarios);
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = url;
+            anchor.download = "sakinah-scenarios.zip";
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            URL.revokeObjectURL(url);
+            setImportMessage(`Downloaded ${allScenarios.length} scenario${allScenarios.length === 1 ? "" : "s"}.`);
+        } catch (downloadError) {
+            setImportMessage(downloadError instanceof Error ? downloadError.message : "Unable to download scenarios.");
+        } finally {
+            setDownloading(false);
+        }
+    };
     return <main className="mx-auto w-full max-w-6xl space-y-6 p-4 md:p-8">
-        <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div className="space-y-2"><p className="text-sm font-medium uppercase tracking-[0.2em] text-primary">Sakinah</p><h1 className="text-3xl font-bold tracking-tight">Scenario Library</h1><p className="text-muted-foreground">Create and manage simulated service-user scenarios for Sakinah testing.</p></div><div className="flex flex-wrap gap-2"><input ref={importInputRef} type="file" accept=".json,application/json" className="hidden" onChange={(event) => void handleImport(event.target.files?.[0])} />{isAdmin ? <Button variant="outline" disabled={saving} onClick={() => setBulkImportOpen(true)}><Upload />Bulk Import Scenarios</Button> : null}<Button variant="outline" disabled={saving} onClick={() => importInputRef.current?.click()}><Upload />Import JSON</Button><Button disabled={saving} onClick={openCreate}><Plus />Create Scenario</Button></div></header>
+        <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div className="space-y-2"><p className="text-sm font-medium uppercase tracking-[0.2em] text-primary">Sakinah</p><h1 className="text-3xl font-bold tracking-tight">Scenario Library</h1><p className="text-muted-foreground">Create and manage simulated service-user scenarios for Sakinah testing.</p></div><div className="flex flex-wrap gap-2"><input ref={importInputRef} type="file" accept=".json,application/json" className="hidden" onChange={(event) => void handleImport(event.target.files?.[0])} />{isAdmin ? <Button variant="outline" disabled={saving || downloading} onClick={() => setBulkImportOpen(true)}><Upload />Bulk Import Scenarios</Button> : null}<Button variant="outline" disabled={saving || downloading} onClick={() => void handleDownloadAll()}><Download />Download all scenarios</Button><Button variant="outline" disabled={saving || downloading} onClick={() => importInputRef.current?.click()}><Upload />Import JSON</Button><Button disabled={saving || downloading} onClick={openCreate}><Plus />Create Scenario</Button></div></header>
         {importMessage ? <p role="status" className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">{importMessage}</p> : null}
         <form className="flex flex-col gap-2 sm:flex-row" onSubmit={(event) => { event.preventDefault(); void runScenarioSearch(); }}><div className="relative flex-1"><Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search scenarios..." aria-label="Search scenarios" className="pl-9" /></div><Button type="submit" disabled={searching}><Search />Search</Button>{appliedSearch ? <Button type="button" variant="outline" disabled={searching} onClick={clearScenarioSearch}>Clear / Show all</Button> : null}</form>
         {loaded ? <p className="text-sm text-muted-foreground">{appliedSearch ? `${scenarios.length} match${scenarios.length === 1 ? "" : "es"}` : `${scenarios.length} scenario${scenarios.length === 1 ? "" : "s"}`}</p> : null}

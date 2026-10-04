@@ -98,6 +98,7 @@ class ServiceProviders(str, Enum):
     SMALLEST = "smallest"
     XAI = "xai"
     LMNT = "lmnt"
+    HUMAIN = "humain"
 
 
 class BaseServiceConfiguration(BaseModel):
@@ -131,6 +132,7 @@ class BaseServiceConfiguration(BaseModel):
         ServiceProviders.SMALLEST,
         ServiceProviders.XAI,
         ServiceProviders.LMNT,
+        ServiceProviders.HUMAIN,
     ]
     api_key: str | list[str]
 
@@ -315,6 +317,11 @@ ELEVENLABS_PROVIDER_MODEL_CONFIG = provider_model_config("ElevenLabs")
 CARTESIA_PROVIDER_MODEL_CONFIG = provider_model_config("Cartesia")
 XAI_PROVIDER_MODEL_CONFIG = provider_model_config("xAI")
 LMNT_PROVIDER_MODEL_CONFIG = provider_model_config("LMNT")
+HUMAIN_PROVIDER_MODEL_CONFIG = provider_model_config(
+    "HUMAIN",
+    description="HUMAIN Voice streaming speech services and HUMAIN IQ models.",
+    provider_docs_url="https://docs.voice.humain.com/en/api-guides",
+)
 INWORLD_PROVIDER_MODEL_CONFIG = provider_model_config(
     "Inworld",
     description=(
@@ -654,6 +661,21 @@ class SarvamLLMConfiguration(BaseLLMConfiguration):
     )
 
 
+@register_llm
+class HumainLLMConfiguration(BaseLLMConfiguration):
+    model_config = HUMAIN_PROVIDER_MODEL_CONFIG
+    provider: Literal[ServiceProviders.HUMAIN] = ServiceProviders.HUMAIN
+    model: str = Field(
+        default="allam-34b",
+        description="HUMAIN IQ model. ALLAM 34B is the default model.",
+        json_schema_extra={"examples": ["allam-34b"], "allow_custom_input": True},
+    )
+    base_url: str = Field(
+        default="https://api.humain.ai/v1",
+        description="HUMAIN IQ OpenAI-compatible API endpoint for your tenant.",
+    )
+
+
 OPENAI_REALTIME_MODELS = ["gpt-realtime-2"]
 # ISO 639-1 codes accepted by the Realtime API's input_audio_transcription.
 # Not exhaustive — the field allows custom input.
@@ -919,6 +941,7 @@ LLMConfig = Annotated[
         HuggingFaceLLMConfiguration,
         MiniMaxLLMConfiguration,
         SarvamLLMConfiguration,
+        HumainLLMConfiguration,
     ],
     Field(discriminator="provider"),
 ]
@@ -1459,6 +1482,37 @@ class LmntTTSConfiguration(BaseTTSConfiguration):
     )
 
 
+HUMAIN_TTS_MODELS = ["nebula"]
+HUMAIN_TTS_VOICES = ["default"]
+
+
+@register_tts
+class HumainTTSConfiguration(BaseTTSConfiguration):
+    model_config = HUMAIN_PROVIDER_MODEL_CONFIG
+    provider: Literal[ServiceProviders.HUMAIN] = ServiceProviders.HUMAIN
+    model: str = Field(
+        default="nebula",
+        description="HUMAIN Voice TTS model.",
+        json_schema_extra={"examples": HUMAIN_TTS_MODELS, "allow_custom_input": True},
+    )
+    voice: str = Field(
+        default="default",
+        description="HUMAIN Voice ID returned by the HUMAIN Voice API.",
+        json_schema_extra={"examples": HUMAIN_TTS_VOICES, "allow_custom_input": True},
+    )
+    language: str = Field(
+        default="auto",
+        description="Language code for synthesis, or auto for provider detection.",
+        json_schema_extra={"allow_custom_input": True},
+    )
+    speed: float = Field(default=1.0, ge=0.5, le=2.0, description="Speech speed multiplier.")
+    base_url: str = Field(
+        default="https://api.voice.humain.com",
+        description="HUMAIN Voice API base URL.",
+    )
+    api_path: str = Field(default="/socket.io", description="HUMAIN Voice Socket.IO path.")
+
+
 TTSConfig = Annotated[
     Union[
         DeepgramTTSConfiguration,
@@ -1477,6 +1531,7 @@ TTSConfig = Annotated[
         SmallestAITTSConfiguration,
         XAITTSConfiguration,
         LmntTTSConfiguration,
+        HumainTTSConfiguration,
     ],
     Field(discriminator="provider"),
 ]
@@ -1878,6 +1933,31 @@ class SmallestAISTTConfiguration(BaseSTTConfiguration):
     )
 
 
+HUMAIN_STT_MODELS = ["bayan_cs_ar_en"]
+HUMAIN_STT_LANGUAGES = ["auto", "ar", "en", "ar-en"]
+
+
+@register_stt
+class HumainSTTConfiguration(BaseSTTConfiguration):
+    model_config = HUMAIN_PROVIDER_MODEL_CONFIG
+    provider: Literal[ServiceProviders.HUMAIN] = ServiceProviders.HUMAIN
+    model: str = Field(
+        default="bayan_cs_ar_en",
+        description="HUMAIN Voice realtime STT model.",
+        json_schema_extra={"examples": HUMAIN_STT_MODELS, "allow_custom_input": True},
+    )
+    language: str = Field(
+        default="auto",
+        description="Language code or auto for HUMAIN Voice language detection.",
+        json_schema_extra={"examples": HUMAIN_STT_LANGUAGES, "allow_custom_input": True},
+    )
+    base_url: str = Field(
+        default="https://api.voice.humain.com",
+        description="HUMAIN Voice API base URL.",
+    )
+    api_path: str = Field(default="/socket.io", description="HUMAIN Voice Socket.IO path.")
+
+
 STTConfig = Annotated[
     Union[
         DeepgramSTTConfiguration,
@@ -1894,6 +1974,7 @@ STTConfig = Annotated[
         AzureSpeechSTTConfiguration,
         SmallestAISTTConfiguration,
         ElevenlabsSTTConfiguration,
+        HumainSTTConfiguration,
     ],
     Field(discriminator="provider"),
 ]

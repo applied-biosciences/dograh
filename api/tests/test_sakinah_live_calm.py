@@ -10,8 +10,10 @@ from api.services.sakinah import live_calm
 @pytest.mark.asyncio
 async def test_live_turns_keep_prompt_and_persist_during_call(monkeypatch):
     update_run = AsyncMock()
+    persist_snapshot = AsyncMock()
     upload = AsyncMock()
     monkeypatch.setattr(live_calm.db_client, "update_workflow_run", update_run)
+    monkeypatch.setattr(live_calm.db_client, "persist_call_snapshot", persist_snapshot)
     monkeypatch.setattr(live_calm, "persist_calm_scoring_artifact", upload)
 
     session = live_calm.LiveCalmSession(42)
@@ -26,6 +28,7 @@ async def test_live_turns_keep_prompt_and_persist_during_call(monkeypatch):
     assert len(payload["caller"]) == 1
     assert len(payload["sakinah"]) == 1
     assert upload.await_args.kwargs["replicate"] is True
+    assert persist_snapshot.await_count == 2
     assert session.analyse_user("I feel worried today.", []) is None
 
 

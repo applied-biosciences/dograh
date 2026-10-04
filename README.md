@@ -130,7 +130,7 @@ curl -o docker-compose.yaml https://raw.githubusercontent.com/dograh-hq/dograh/m
 
 ## CALMOS / Sakinah Scenario Console
 
-CALMOS Connect v1.47.0.23 includes the Sakinah Scenario Console at `/sakinah` and
+CALMOS Connect v1.47.0.24 includes the Sakinah Scenario Console at `/sakinah` and
 its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
 
 - Durable Agent Runs/Call History records for active and completed calls,
@@ -138,8 +138,9 @@ its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
   metadata.
 - Live Sakinah calls and browser tests expose turn-by-turn CALM scoring,
   engineered prompt context, trend direction, and downloadable JSON; the same
-  scoring payload is persisted incrementally in Postgres and MinIO, with AWS S3
-  replication. Enable `calm_scoring.enabled` in the agent's General settings;
+  scoring payload is persisted incrementally in Postgres and MinIO, with the
+  final scoring table kept current during the call and AWS S3 replication.
+  Enable `calm_scoring.enabled` in the agent's General settings;
   new browser and inbound calls read this setting when they start.
   Each run detail page shows readable, alternating turn cards and four graphs
   covering caller/Sakinah emotional and safety dimensions.
@@ -151,7 +152,13 @@ its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
   (`UNKNOWN`, `FIRST_TIME`, `RECOGNISED`, and `VERIFIED`).
 - Scenario Library search across names, descriptions, categories, tags,
   identifiers, and relevant scenario text, with filtering performed server-side
-  for database-backed libraries.
+  for database-backed libraries. The library also supports downloading all
+  scenarios as a ZIP containing individual JSON files and a manifest.
+
+HUMAIN Voice is available as a selectable TTS provider with a voice ID dropdown
+and as a realtime STT provider. HUMAIN IQ is available as an OpenAI-compatible
+LLM provider with ALLAM 34B as the default model; tenant endpoints can be
+configured for each service.
 
 Both consoles show durable run history with conversation previews and signed
 download controls for available recordings and transcripts. Call persistence

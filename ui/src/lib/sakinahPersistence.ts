@@ -9,6 +9,7 @@ import {
     type ScenarioResponse as ApiScenarioResponse,
     updateScenarioApiV1SakinahScenariosScenarioIdPut,
 } from "@/client";
+import JSZip from "jszip";
 
 import {
     parseStoredScenarios,
@@ -163,6 +164,22 @@ export async function listSakinahScenarios(search = ""): Promise<Scenario[]> {
     });
     if (response.error || !response.data) throw requestError(response.error, "Unable to load scenarios.");
     return response.data.scenarios.map(normalizeScenario);
+}
+
+export async function buildSakinahScenariosZip(scenarios: Scenario[]): Promise<Blob> {
+    const zip = new JSZip();
+    zip.file("scenarios.json", JSON.stringify(scenarios, null, 2));
+    const usedNames = new Set<string>();
+    scenarios.forEach((scenario, index) => {
+        const title = scenario.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "scenario";
+        const baseName = `${String(scenario.sequence || index + 1).padStart(3, "0")}-${title}`;
+        let fileName = `${baseName}.json`;
+        let suffix = 2;
+        while (usedNames.has(fileName)) fileName = `${baseName}-${suffix++}.json`;
+        usedNames.add(fileName);
+        zip.file(fileName, JSON.stringify(scenario, null, 2));
+    });
+    return zip.generateAsync({ type: "blob" });
 }
 
 export async function previewBulkSakinahScenarios(

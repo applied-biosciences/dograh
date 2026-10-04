@@ -68,6 +68,7 @@ class UserConfigurationValidator:
             ServiceProviders.SMALLEST.value: self._check_smallest_api_key,
             ServiceProviders.XAI.value: self._check_xai_api_key,
             ServiceProviders.LMNT.value: self._check_lmnt_api_key,
+            ServiceProviders.HUMAIN.value: self._check_humain_api_key,
         }
 
     async def validate(
@@ -445,6 +446,11 @@ class UserConfigurationValidator:
 
     def _check_ultravox_realtime_api_key(self, model: str, api_key: str) -> bool:
         return True
+
+    def _check_humain_api_key(self, model: str, api_key: str) -> bool:
+        # HUMAIN credentials are tenant-scoped and shared by Voice and IQ.
+        # Endpoint-specific validation is left to the selected service.
+        return bool(api_key)
 
     def _check_speechmatics_api_key(self, model: str, api_key: str) -> bool:
         return True

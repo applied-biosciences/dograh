@@ -196,6 +196,18 @@ class LiveCalmSession:
                     type(exc).__name__,
                 )
             try:
+                # Keep the durable call-score row current while the call is
+                # live, instead of waiting for the background completion job.
+                # The row contains the full CALM payload, including prompts,
+                # turn scores, and the final scoring table shape.
+                await db_client.persist_call_snapshot(self.workflow_run_id)
+            except Exception as exc:  # scoring must never interrupt a call
+                logger.warning(
+                    "CALM score-table persistence failed for run {}: {}",
+                    self.workflow_run_id,
+                    type(exc).__name__,
+                )
+            try:
                 await persist_calm_scoring_artifact(
                     self.workflow_run_id, payload, replicate=True
                 )

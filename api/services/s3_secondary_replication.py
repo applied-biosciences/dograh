@@ -138,7 +138,10 @@ def secondary_status(artifact_refs: list[dict[str, Any]]) -> dict[str, Any]:
         "prefix": AWS_S3_PREFIX or None,
         "objects": objects,
     }
-    if not ENABLE_AWS_S3_SECONDARY:
+    # A configured bucket is an explicit request to retain the secondary copy.
+    # Keep the flag as an override for deployments that want the old opt-in
+    # behaviour, but do not report AWS as configured while silently skipping it.
+    if not ENABLE_AWS_S3_SECONDARY and not AWS_RECORDINGS_BUCKET:
         result["status"] = "disabled"
     elif not AWS_RECORDINGS_BUCKET:
         result["status"] = "not_configured"

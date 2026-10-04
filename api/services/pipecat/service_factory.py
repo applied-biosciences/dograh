@@ -21,6 +21,7 @@ from api.services.configuration.registry import ServiceProviders
 from api.services.pipecat.gemini_json_schema_adapter import (
     DograhGeminiJSONSchemaAdapter,
 )
+from api.services.pipecat.humain import HumainSTTService, HumainTTSService
 from api.services.pipecat.minimax_tts import MiniMaxOwnedSessionTTSService
 from api.utils.url_security import validate_user_configured_service_url
 from pipecat.services.assemblyai.stt import AssemblyAISTTService, AssemblyAISTTSettings
@@ -312,6 +313,18 @@ def create_stt_service(
             should_interrupt=False,  # Let UserAggregator own interruption confirmation.
             **kwargs,
         )
+    elif user_config.stt.provider == ServiceProviders.HUMAIN.value:
+        base_url = getattr(user_config.stt, "base_url", None) or "https://api.voice.humain.com"
+        _validate_runtime_service_url(base_url, "base_url")
+        return HumainSTTService(
+            api_key=user_config.stt.api_key,
+            base_url=base_url,
+            api_path=getattr(user_config.stt, "api_path", "/socket.io"),
+            model=user_config.stt.model,
+            language=getattr(user_config.stt, "language", None) or "auto",
+            should_interrupt=False,
+            sample_rate=audio_config.transport_in_sample_rate,
+        )
     elif user_config.stt.provider == ServiceProviders.GOOGLE.value:
         language = getattr(user_config.stt, "language", None) or "en-US"
         location = getattr(user_config.stt, "location", None) or "global"
@@ -587,6 +600,22 @@ def create_tts_service(
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
             **kwargs,
+        )
+    elif user_config.tts.provider == ServiceProviders.HUMAIN.value:
+        base_url = getattr(user_config.tts, "base_url", None) or "https://api.voice.humain.com"
+        _validate_runtime_service_url(base_url, "base_url")
+        return HumainTTSService(
+            api_key=user_config.tts.api_key,
+            base_url=base_url,
+            api_path=getattr(user_config.tts, "api_path", "/socket.io"),
+            model=user_config.tts.model,
+            voice=getattr(user_config.tts, "voice", None) or "default",
+            language=getattr(user_config.tts, "language", None) or "auto",
+            speed=getattr(user_config.tts, "speed", None) or 1.0,
+            sample_rate=audio_config.transport_out_sample_rate,
+            text_filters=[xml_function_tag_filter],
+            skip_aggregator_types=["recording_router", "recording"],
+            silence_time_s=1.0,
         )
     elif user_config.tts.provider == ServiceProviders.GOOGLE.value:
         model = getattr(user_config.tts, "model", None) or "chirp_3_hd"
@@ -964,6 +993,7 @@ def create_llm_service_from_provider(
     if provider in (
         ServiceProviders.OPENAI.value,
         ServiceProviders.ATLASCLOUD.value,
+        ServiceProviders.HUMAIN.value,
     ):
         kwargs = {}
         if base_url:
