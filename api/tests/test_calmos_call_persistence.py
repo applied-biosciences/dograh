@@ -296,6 +296,7 @@ async def test_explicit_memory_opt_out_is_persisted_before_extraction(monkeypatc
                 id=workflow_run_id,
                 service_user_id="service-user-1",
                 caller_state="RECOGNISED",
+                gathered_context={},
                 full_transcript=("user: Please don't remember anything I said today."),
                 workflow=SimpleNamespace(
                     name="Sakinah Scenario Console", organization_id=7

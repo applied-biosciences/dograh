@@ -10,7 +10,11 @@ from typing import Any
 from loguru import logger
 from pipecat.processors.aggregators.llm_context import LLMContext
 
-from api.constants import MEMORY_EMBEDDING_MODEL, MEMORY_ENABLED
+from api.constants import (
+    MEMORY_EMBEDDING_MODEL,
+    MEMORY_ENABLED,
+    memory_workflow_allowed,
+)
 from api.db import db_client
 from api.services.configuration.ai_model_configuration import (
     apply_managed_embeddings_base_url,
@@ -197,6 +201,18 @@ async def _embed_memories(
         return [None for _ in texts]
 
 
+def _as_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in {"true", "yes", "1"}:
+            return True
+        if v in {"false", "no", "0"}:
+            return False
+    return None
+
+
 async def extract_and_store_memories(workflow_run_id: int) -> int:
     """Extract and persist useful memories without exposing the whole history."""
     run = await db_client.get_workflow_run_by_id(workflow_run_id)
@@ -205,9 +221,28 @@ async def extract_and_store_memories(workflow_run_id: int) -> int:
         or run is None
         or not run.service_user_id
         or not run.workflow
-        or run.workflow.name != "Sakinah Scenario Console"
+        or not memory_workflow_allowed(run.workflow.name)
     ):
         return 0
+    gathered = run.gathered_context or {}
+    if gathered.get("profile_binding_status") == "unverified_existing":
+        return 0
+    consent = _as_bool(gathered.get("memory_consent"))
+    if consent is not None:
+        try:
+            await db_client.record_privacy_permission(
+                organization_id=run.workflow.organization_id,
+                service_user_id=run.service_user_id,
+                permission_type="memory_storage",
+                granted=consent,
+                verification_level=(
+                    "verified" if run.caller_state == "VERIFIED" else "none"
+                ),
+                source_workflow_run_id=run.id,
+            )
+        except Exception:  # noqa: BLE001 - post-call failure must not affect the call
+            logger.warning("Memory consent could not be recorded")
+            return 0
     if not await db_client.is_memory_permitted(
         run.service_user_id, permission_type="memory_storage"
     ):

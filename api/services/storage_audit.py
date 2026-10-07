@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from api.constants import ENABLE_AWS_S3_SECONDARY, RECORD_CALLS
+from api.constants import AWS_RECORDINGS_BUCKET, ENABLE_AWS_S3_SECONDARY, RECORD_CALLS
 from api.db import db_client
 from api.enums import StorageBackend
 from api.services.storage import storage_fs
@@ -47,6 +47,36 @@ async def _verify_object(object_key: str, expected_size: int | None) -> dict[str
     }
 
 
+def _s3_status(
+    expected: dict[str, str | None], replications: list[Any]
+) -> str:
+    """Report current artifacts only, never infer copy success from config."""
+    configured = bool(AWS_RECORDINGS_BUCKET or ENABLE_AWS_S3_SECONDARY)
+    if not expected:
+        return "not_expected" if configured else "not_configured"
+    by_key = {row.primary_object_key: row for row in replications}
+    statuses = []
+    for key, checksum in expected.items():
+        row = by_key.get(key)
+        if row is None or (checksum and row.checksum_sha256 != checksum):
+            statuses.append("pending" if configured else "unknown")
+        elif row.replication_status == "failed":
+            statuses.append("failed")
+        elif row.replication_status == "synced" and row.s3_saved:
+            statuses.append("verified")
+        elif row.s3_bucket:
+            statuses.append("pending")
+        else:
+            statuses.append("not_configured")
+    if "failed" in statuses:
+        return "failed"
+    if all(status == "verified" for status in statuses):
+        return "verified"
+    if "pending" in statuses:
+        return "pending"
+    return "unknown" if "unknown" in statuses else "not_configured"
+
+
 async def audit_run_storage(
     run_id: int,
     *,
@@ -71,11 +101,7 @@ async def audit_run_storage(
                 "recording_metadata_exists": False,
             },
             "minio": {"status": "not_expected", "configured": False, "objects": []},
-            "aws": {
-                "status": "configured_but_unused"
-                if ENABLE_AWS_S3_SECONDARY
-                else "not_configured"
-            },
+            "aws": {"status": _s3_status({}, [])},
         }
 
     utterances = await db_client.get_utterances_for_run(run_id)
@@ -85,6 +111,23 @@ async def audit_run_storage(
     calm_metadata = (run.extra or {}).get("calm_scoring") if run.extra else None
     calm_key = calm_metadata.get("object_key") if isinstance(calm_metadata, dict) else None
     calm_expected = bool((run.annotations or {}).get("calm_scoring") or calm_key)
+
+    # CALM replication uses immutable revisions, not the mutable display object.
+    expected_s3 = {
+        recording.object_key: recording.checksum_sha256 for recording in recordings
+    }
+    if transcript_key:
+        expected_s3[transcript_key] = None
+    if isinstance(calm_metadata, dict):
+        if "objects" in calm_metadata:
+            for item in calm_metadata["objects"]:
+                if item.get("object_key"):
+                    expected_s3[item["object_key"]] = item.get("checksum_sha256")
+        elif calm_key:
+            expected_s3[calm_key] = calm_metadata.get("checksum_sha256")
+    replications = await db_client.get_artifact_replications_for_run(
+        run_id, organization_id=organization_id
+    )
 
     objects: list[dict[str, Any]] = []
     if transcript_key:
@@ -174,9 +217,5 @@ async def audit_run_storage(
             "objects_found": sum(item["status"] == "verified" for item in objects),
             "objects": objects,
         },
-        "aws": {
-            "status": "configured_but_unused"
-            if ENABLE_AWS_S3_SECONDARY
-            else "not_configured"
-        },
+        "aws": {"status": _s3_status(expected_s3, replications)},
     }

@@ -1,3 +1,18 @@
+# v1.47.0.26 (2026-10-07)
+
+- Start from the v1.47.0.25 implementation branch and preserve existing CALMOS
+  behavior outside the scoped memory-saving and storage-status changes.
+- Allow memory extraction for configured workflows with normalized names, record
+  yes/no answers as privacy permissions before checking eligibility, and retain
+  automatic saving by default when no answer was collected. Preserve caller
+  refusals and the unverified-existing-profile guard.
+- Keep saved memories out of subsequent calls until the later PIN verification
+  build. Add `MEMORY_WORKFLOW_NAMES` and
+  `MEMORY_REQUIRE_EXPLICIT_CONSENT` to the API container environment.
+- Report current per-run S3 replication outcomes in Run Details as copying,
+  successful, or failed, using the existing artifact replication records.
+- Bump the root, API and UI versions to 1.47.0.26. No database migration.
+
 # v1.47.0.24 (2026-10-04)
 
 - Base: v1.47.0.23 CALM/S3 branch, commit 71e91d14.

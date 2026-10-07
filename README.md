@@ -130,7 +130,7 @@ curl -o docker-compose.yaml https://raw.githubusercontent.com/dograh-hq/dograh/m
 
 ## CALMOS / Sakinah Scenario Console
 
-CALMOS Connect v1.47.0.24 includes the Sakinah Scenario Console at `/sakinah` and
+CALMOS Connect v1.47.0.26 includes the Sakinah Scenario Console at `/sakinah` and
 its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
 
 - Durable Agent Runs/Call History records for active and completed calls,
@@ -149,6 +149,13 @@ its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
 - A privacy-controlled Sakinah memory layer backed by PostgreSQL pgvector,
   stable service-user identities, provenance, retention, and caller states
   (`UNKNOWN`, `FIRST_TIME`, `RECOGNISED`, and `VERIFIED`).
+- Memory extraction now accepts the configured Sakinah workflows through
+  `MEMORY_WORKFLOW_NAMES`. With `MEMORY_REQUIRE_EXPLICIT_CONSENT=false` (the
+  default), saving remains automatic unless the caller explicitly opts out;
+  consent answers are recorded as privacy permissions. This release saves
+  memories for future use but does not load them into calls pending PIN
+  verification. Run Details reports each run's S3 backup as copying, successful,
+  or failed based on its artifact replication records.
 - Scenario Library search across names, descriptions, categories, tags,
   identifiers, and relevant scenario text, with filtering performed server-side
   for database-backed libraries.

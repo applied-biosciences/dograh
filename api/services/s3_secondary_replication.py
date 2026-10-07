@@ -228,6 +228,11 @@ async def schedule_s3_replication(
         result["error_class"] = type(exc).__name__
         for item in result["objects"]:
             item["status"] = "failed"
+            await _record_replication_result(
+                run_id,
+                item["source_object_key"],
+                {"status": "failed", "attempt": 0, "error_class": type(exc).__name__},
+            )
         _log_replication_event(
             run_id=run_id,
             bucket=AWS_RECORDINGS_BUCKET,

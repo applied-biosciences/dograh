@@ -159,6 +159,22 @@ S3_ADDRESSING_STYLE = os.environ.get("S3_ADDRESSING_STYLE")
 # environment-driven so the call path remains usable in local/OSS installs
 # without AWS credentials.
 MEMORY_ENABLED = os.getenv("MEMORY_ENABLED", "true").lower() == "true"
+MEMORY_WORKFLOW_NAMES = {
+    " ".join(name.split()).lower()
+    for name in os.getenv(
+        "MEMORY_WORKFLOW_NAMES", "Sakinah Scenario Console"
+    ).split(",")
+    if name.strip()
+}
+MEMORY_REQUIRE_EXPLICIT_CONSENT = (
+    os.getenv("MEMORY_REQUIRE_EXPLICIT_CONSENT", "false").lower() == "true"
+)
+
+
+def memory_workflow_allowed(name: str | None) -> bool:
+    return " ".join((name or "").split()).lower() in MEMORY_WORKFLOW_NAMES
+
+
 MEMORY_EMBEDDING_MODEL = os.getenv("MEMORY_EMBEDDING_MODEL", "text-embedding-3-small")
 MEMORY_EMBEDDING_DIMENSIONS = int(os.getenv("MEMORY_EMBEDDING_DIMENSIONS", "1536"))
 MEMORY_MAX_RESULTS = max(1, int(os.getenv("MEMORY_MAX_RESULTS", "5")))

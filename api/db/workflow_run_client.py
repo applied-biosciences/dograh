@@ -36,6 +36,25 @@ def append_unique_tags(existing_tags: object, new_tags: object) -> list:
 
 
 class WorkflowRunClient(BaseDBClient):
+    async def get_artifact_replications_for_run(
+        self, run_id: int, *, organization_id: int | None = None
+    ) -> list[ArtifactReplicationStatusModel]:
+        """Read copy results for a run, scoped like the parent run lookup."""
+        async with self.async_session() as session:
+            query = (
+                select(ArtifactReplicationStatusModel)
+                .join(
+                    WorkflowRunModel,
+                    WorkflowRunModel.id == ArtifactReplicationStatusModel.run_id,
+                )
+                .join(WorkflowModel, WorkflowModel.id == WorkflowRunModel.workflow_id)
+                .where(ArtifactReplicationStatusModel.run_id == run_id)
+            )
+            if organization_id is not None:
+                query = query.where(WorkflowModel.organization_id == organization_id)
+            result = await session.execute(query)
+            return list(result.scalars().all())
+
     async def upsert_artifact_replication_status(
         self,
         *,

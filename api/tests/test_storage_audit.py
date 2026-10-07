@@ -2,11 +2,20 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from api.db.workflow_run_client import WorkflowRunClient
 from api.services import storage_audit, workflow_run_artifacts
+
+
+@pytest.fixture(autouse=True)
+def replication_db(monkeypatch):
+    reads = AsyncMock(return_value=[])
+    monkeypatch.setattr(storage_audit.db_client, "get_artifact_replications_for_run", reads)
+    monkeypatch.setattr(storage_audit.db_client, "upsert_artifact_replication_status", AsyncMock())
+    return reads
 
 
 def _run(**overrides):
@@ -87,6 +96,112 @@ async def test_audit_does_not_expect_audio_for_an_initialized_run(monkeypatch):
 
     assert result["minio"]["status"] == "not_expected"
     assert result["minio"]["objects"] == []
+
+
+def _replication(key="transcripts/7.txt", status="synced", **overrides):
+    return SimpleNamespace(**{
+        "primary_object_key": key, "replication_status": status,
+        "s3_saved": status == "synced", "s3_bucket": "test-backup",
+        "checksum_sha256": None, **overrides,
+    })
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status, expected", [
+    ("synced", "verified"), ("pending", "pending"),
+    ("retry_pending", "pending"), ("failed", "failed"),
+])
+async def test_audit_uses_durable_run_replication_result(monkeypatch, replication_db, status, expected):
+    monkeypatch.setattr(storage_audit, "storage_fs", _Storage())
+    monkeypatch.setattr(storage_audit.db_client, "get_workflow_run", AsyncMock(return_value=_run()))
+    monkeypatch.setattr(storage_audit.db_client, "get_utterances_for_run", AsyncMock(return_value=[]))
+    monkeypatch.setattr(storage_audit.db_client, "get_call_recordings_for_run", AsyncMock(return_value=[]))
+    replication_db.return_value = [_replication(status=status)]
+    result = await storage_audit.audit_run_storage(7, organization_id=11)
+    assert result["aws"]["status"] == expected
+    replication_db.assert_awaited_once_with(7, organization_id=11)
+
+
+@pytest.mark.parametrize("rows, expected", [
+    ([], "pending"),
+    ([_replication()], "pending"),
+    ([_replication(), _replication("recordings/7/call.wav")], "verified"),
+    ([_replication(), _replication("recordings/7/call.wav", "failed")], "failed"),
+    ([_replication(), _replication("recordings/7/call.wav", "pending")], "pending"),
+    ([_replication(s3_saved=False), _replication("recordings/7/call.wav")], "pending"),
+    ([_replication("transcripts/other-run.txt")], "pending"),
+])
+def test_s3_requires_all_current_artifacts_to_be_synced(monkeypatch, rows, expected):
+    monkeypatch.setattr(storage_audit, "AWS_RECORDINGS_BUCKET", "test-backup")
+    assert storage_audit._s3_status(
+        {"transcripts/7.txt": None, "recordings/7/call.wav": None}, rows
+    ) == expected
+
+
+def test_s3_configuration_alone_is_not_success(monkeypatch):
+    monkeypatch.setattr(storage_audit, "AWS_RECORDINGS_BUCKET", None)
+    monkeypatch.setattr(storage_audit, "ENABLE_AWS_S3_SECONDARY", False)
+    assert storage_audit._s3_status({}, []) == "not_configured"
+    monkeypatch.setattr(storage_audit, "AWS_RECORDINGS_BUCKET", "test-backup")
+    assert storage_audit._s3_status({}, []) == "not_expected"
+    assert storage_audit._s3_status({"transcripts/7.txt": None}, []) == "pending"
+
+
+def test_s3_stale_checksum_is_not_success(monkeypatch):
+    monkeypatch.setattr(storage_audit, "AWS_RECORDINGS_BUCKET", "test-backup")
+    assert storage_audit._s3_status(
+        {"transcripts/7.txt": "new-revision"},
+        [_replication(checksum_sha256="old-revision")],
+    ) == "pending"
+
+
+@pytest.mark.asyncio
+async def test_audit_checks_current_calm_revisions_not_old_results(monkeypatch, replication_db):
+    calm_objects = [
+        {"object_key": f"calm-scoring/revisions/new/{name}.json", "checksum_sha256": name}
+        for name in ("turn-by-turn", "scoring-table", "prompt-engineering")
+    ]
+    run = _run(extra={"calm_scoring": {"object_key": "calm-scoring/live.json", "objects": calm_objects}})
+    monkeypatch.setattr(storage_audit, "AWS_RECORDINGS_BUCKET", "test-backup")
+    monkeypatch.setattr(storage_audit, "storage_fs", _Storage())
+    monkeypatch.setattr(storage_audit.db_client, "get_workflow_run", AsyncMock(return_value=run))
+    monkeypatch.setattr(storage_audit.db_client, "get_utterances_for_run", AsyncMock(return_value=[]))
+    monkeypatch.setattr(storage_audit.db_client, "get_call_recordings_for_run", AsyncMock(return_value=[]))
+    replication_db.return_value = [
+        _replication(), _replication("calm-scoring/revisions/old/turn-by-turn.json", "failed"),
+        *[_replication(item["object_key"], checksum_sha256=item["checksum_sha256"]) for item in calm_objects],
+    ]
+    result = await storage_audit.audit_run_storage(7, organization_id=11)
+    assert result["aws"]["status"] == "verified"
+    replication_db.return_value.pop()
+    result = await storage_audit.audit_run_storage(7, organization_id=11)
+    assert result["aws"]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_missing_or_inaccessible_run_does_not_read_replication(monkeypatch, replication_db):
+    monkeypatch.setattr(storage_audit.db_client, "get_workflow_run", AsyncMock(return_value=None))
+    result = await storage_audit.audit_run_storage(7, organization_id=11)
+    assert result["aws"]["status"] != "verified"
+    replication_db.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_replication_read_filters_run_and_organization():
+    client = object.__new__(WorkflowRunClient)
+    session = AsyncMock()
+    result = Mock()
+    rows = [_replication()]
+    result.scalars.return_value.all.return_value = rows
+    session.execute.return_value = result
+    context = AsyncMock()
+    context.__aenter__.return_value = session
+    client.async_session = Mock(return_value=context)
+    assert await client.get_artifact_replications_for_run(7, organization_id=11) == rows
+    query = session.execute.call_args.args[0].compile()
+    assert query.params == {"run_id_1": 7, "organization_id_1": 11}
+    assert "workflow_runs.id = artifact_replication_status.run_id" in str(query)
+    assert "workflows.id = workflow_runs.workflow_id" in str(query)
 
 
 def _artifact_run():

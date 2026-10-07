@@ -40,9 +40,10 @@ import { useAuth } from '@/lib/auth';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { formatDateTime } from '@/lib/dateTime';
 import { downloadFile, getSignedUrl } from '@/lib/files';
+import { s3StatusLabel } from '@/lib/storageStatus';
 import { cn } from '@/lib/utils';
 
-type StorageStatus = 'verified' | 'missing' | 'pending' | 'not_expected' | 'not_configured' | 'unknown';
+type StorageStatus = 'verified' | 'missing' | 'pending' | 'failed' | 'not_expected' | 'not_configured' | 'unknown';
 
 interface StorageAudit {
     postgres?: {
@@ -152,7 +153,7 @@ function StorageAuditSection({ audit }: { audit: StorageAudit }) {
                     </div>
                     <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
                         <p className="text-muted-foreground">AWS S3</p>
-                        <p className="font-medium">{statusLabel(audit.aws?.status)} {statusIcon(audit.aws?.status)}</p>
+                        <p className="font-medium">{s3StatusLabel(audit.aws?.status)}</p>
                     </div>
                     <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
                         <p className="text-muted-foreground">CALM scoring</p>

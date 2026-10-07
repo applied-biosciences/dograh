@@ -22,6 +22,7 @@ from api.constants import (
     CALLER_IDENTIFIER_HASH_KEY,
     MEMORY_MAX_RESULTS,
     MEMORY_MIN_SIMILARITY,
+    MEMORY_REQUIRE_EXPLICIT_CONSENT,
 )
 from api.db.base_client import BaseDBClient
 from api.db.models import (
@@ -440,11 +441,9 @@ class CallPersistenceClient(BaseDBClient):
                 .limit(1)
             )
             permission = result.scalars().first()
-            return (
-                service_user.memory_enabled
-                if permission is None
-                else permission.granted
-            )
+            if permission is None:
+                return service_user.memory_enabled and not MEMORY_REQUIRE_EXPLICIT_CONSENT
+            return permission.granted
 
     async def record_privacy_permission(
         self,

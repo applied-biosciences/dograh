@@ -9,6 +9,15 @@ from botocore.exceptions import ClientError
 from api.services import s3_secondary_replication as replication
 
 
+@pytest.fixture(autouse=True)
+def replication_writes(monkeypatch):
+    """Unit tests exercise copy IO without contacting a database."""
+    monkeypatch.setattr("api.db.db_client.upsert_artifact_replication_status", AsyncMock())
+    update = AsyncMock()
+    monkeypatch.setattr("api.db.db_client.update_artifact_replication_status", update)
+    return update
+
+
 def _refs():
     return [
         {
@@ -136,6 +145,32 @@ async def test_schedule_preserves_primary_keys_and_reports_pending(monkeypatch):
     assert result["objects"][0]["object_key"].startswith("calmos/recordings/")
     assert calls[0][0][0] == replication.FunctionNames.REPLICATE_WORKFLOW_RUN_ARTIFACTS_S3
     assert calls[0][0][1] == 88
+
+
+@pytest.mark.asyncio
+async def test_failed_enqueue_records_failure_for_each_artifact(monkeypatch, replication_writes):
+    monkeypatch.setattr(replication, "AWS_RECORDINGS_BUCKET", "test-backup")
+    monkeypatch.setattr(replication, "get_current_storage_backend", lambda: replication.StorageBackend.MINIO)
+    monkeypatch.setattr("api.tasks.arq.enqueue_job", AsyncMock(side_effect=ConnectionError()))
+    result = await replication.schedule_s3_replication(88, {
+        "storage_backend": "minio",
+        "recordings": {"objects": [{**ref, "status": "success"} for ref in _refs()]},
+    })
+    assert result["status"] == "failed"
+    assert replication_writes.await_count == 2
+    for call, ref in zip(replication_writes.call_args_list, _refs()):
+        assert call.kwargs["run_id"] == 88
+        assert call.kwargs["primary_object_key"] == ref["object_key"]
+        assert call.kwargs["replication_status"] == "failed"
+        assert call.kwargs["s3_saved"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status, durable_status, saved", [("success", "synced", True), ("failed", "failed", False)])
+async def test_copy_result_records_authoritative_status(replication_writes, status, durable_status, saved):
+    await replication._record_replication_result(88, "recordings/test.wav", {"status": status, "attempt": 2})
+    assert replication_writes.call_args.kwargs["replication_status"] == durable_status
+    assert replication_writes.call_args.kwargs["s3_saved"] is saved
 
 
 @pytest.mark.asyncio
