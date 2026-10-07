@@ -1,3 +1,16 @@
+# v1.47.0.28 (2026-10-07)
+
+- Add deterministic Sakinah continuity action events for caller-profile lookup,
+  returning-caller choice, bounded backend retrieval, and bounded-context
+  injection. Events use the existing real-time feedback/log envelope, are
+  correlated by call and turn, deduplicated by action identity, and rendered as
+  internal highlighted boxes in live/history/exported transcripts.
+- Add structured bounded retrieval counts, safe call summaries and durable-fact
+  categories to the per-turn trace while keeping raw transcripts, credentials,
+  phone numbers, PIN/OTP material and unrestricted memory out of action boxes.
+- Preserve the existing Sakinah workflow behavior and agent definition; this
+  release adds observability at the runtime/backend and transcript surfaces.
+
 # v1.47.0.27 (2026-10-07)
 
 - Complete the deferred Sakinah recall side from v1.47.0.26 with an

@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 
 import { MessageBubble } from "./MessageBubble";
+import { ActionEventCard } from "./ActionEventCard";
 import { NodeTransitionMarker } from "./NodeTransitionMarker";
 import { NoticeCard } from "./NoticeCard";
 import { ToolCallCard } from "./ToolCallCard";
@@ -66,6 +67,19 @@ export function ConversationItemView({ item, actions }: ConversationItemViewProp
 
     if (item.kind === "node-transition") {
         return <NodeTransitionMarker nodeName={item.nodeName} />;
+    }
+
+    if (item.kind === "action-event") {
+        return (
+            <ActionEventCard
+                action={item.action}
+                status={item.status}
+                timestamp={item.timestamp}
+                callId={item.callId}
+                turnId={item.turnId}
+                details={item.details}
+            />
+        );
     }
 
     return (

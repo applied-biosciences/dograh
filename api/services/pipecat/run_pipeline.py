@@ -23,16 +23,6 @@ from api.services.integrations import (
     create_runtime_sessions,
 )
 from api.services.memory.orchestrator import prepare_memory_context
-from api.services.sakinah.continuity import (
-    is_continuity_workflow,
-    prepare_sakinah_identity,
-)
-from api.services.sakinah.pin_runtime import (
-    SakinahIdentityOutputObserver,
-    SakinahIdentityRuntime,
-    SakinahIdentityUserObserver,
-    SakinahSecureInputProcessor,
-)
 from api.services.observability.active_calls import (
     register_active_call as register_worker_active_call,
 )
@@ -58,6 +48,7 @@ from api.services.pipecat.pipeline_metrics_aggregator import PipelineMetricsAggr
 from api.services.pipecat.pre_call_fetch import execute_pre_call_fetch
 from api.services.pipecat.realtime_feedback_events import (
     build_node_transition_event,
+    build_sakinah_continuity_action_event,
 )
 from api.services.pipecat.realtime_feedback_observer import (
     RealtimeFeedbackObserver,
@@ -87,6 +78,17 @@ from api.services.pipecat.transcript_log_coordinator import TranscriptLogCoordin
 from api.services.pipecat.transport_setup import create_webrtc_transport
 from api.services.pipecat.worker_runner import run_pipeline_worker
 from api.services.pipecat.ws_sender_registry import get_ws_sender
+from api.services.sakinah.continuity import (
+    internal_reference,
+    is_continuity_workflow,
+    prepare_sakinah_identity,
+)
+from api.services.sakinah.pin_runtime import (
+    SakinahIdentityOutputObserver,
+    SakinahIdentityRuntime,
+    SakinahIdentityUserObserver,
+    SakinahSecureInputProcessor,
+)
 from api.services.telephony import registry as telephony_registry
 from api.services.workflow.dto import ReactFlowDTO
 from api.services.workflow.initial_context import merge_external_initial_context
@@ -627,6 +629,58 @@ async def _run_pipeline_impl(
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
+    # This is the existing real-time feedback/event channel. Create it before
+    # identity enrichment so the lookup action is emitted at the point the
+    # deterministic backend lookup completes, before the first turn.
+    in_memory_logs_buffer = InMemoryLogsBuffer(workflow_run_id)
+    ws_sender = get_ws_sender(workflow_run_id)
+    sakinah_action_event_ids: set[str] = set()
+    action_call_id = f"run:{workflow_run_id}"
+
+    async def emit_sakinah_action_event(
+        *,
+        action: str,
+        status: str,
+        details: dict,
+        turn_id: int | None = None,
+    ) -> None:
+        event = build_sakinah_continuity_action_event(
+            action=action,
+            call_id=action_call_id,
+            turn_id=turn_id,
+            status=status,
+            details=details,
+        )
+        event_id = event["payload"]["action_event_id"]
+        if event_id in sakinah_action_event_ids:
+            return
+        sakinah_action_event_ids.add(event_id)
+        if ws_sender:
+            try:
+                ws_event = dict(event)
+                if in_memory_logs_buffer.current_node_id:
+                    ws_event.update(
+                        {
+                            "node_id": in_memory_logs_buffer.current_node_id,
+                            "node_name": in_memory_logs_buffer.current_node_name,
+                        }
+                    )
+                await ws_sender(ws_event)
+            except Exception as exc:  # noqa: BLE001 - observability is optional
+                logger.debug(
+                    "Failed to stream Sakinah action event {} ({})", action, type(exc).__name__
+                )
+        try:
+            await in_memory_logs_buffer.append(
+                event,
+                timestamp=event["timestamp"],
+                turn=turn_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - observability must not block calls
+            logger.warning(
+                "Failed to persist Sakinah action event {} ({})", action, type(exc).__name__
+            )
+
     # Use the run's pinned definition for graph + configs (not the workflow's current)
     run_definition = workflow_run.definition
     run_workflow_json = run_definition.workflow_json
@@ -688,6 +742,28 @@ async def _run_pipeline_impl(
                 organization_id=None,
                 call_context={},
             )
+        caller_result = sakinah_identity_context.get("caller_result", "unknown")
+        lookup_status = sakinah_identity_context.get("lookup_status", "unavailable")
+        await emit_sakinah_action_event(
+            action="CALLER_PROFILE_LOOKUP",
+            status={
+                "success": "success",
+                "error": "error",
+                "unavailable": "unavailable",
+            }.get(lookup_status, "unavailable"),
+            details={
+                "caller_result": caller_result
+                if caller_result in {"new", "returning", "unknown"}
+                else "unknown",
+                "lookup_source": "inbound_caller_profile_lookup",
+                "service_user_ref": internal_reference(
+                    sakinah_identity_context.get("service_user_id"),
+                    prefix="service-user",
+                ),
+                "continuity_available": caller_result == "returning",
+                "profile_data_used_for_routing": caller_result in {"new", "returning"},
+            },
+        )
         merged_call_context_vars.update(
             {
                 key: value
@@ -907,12 +983,7 @@ async def _run_pipeline_impl(
             )
         )
 
-    # Create in-memory logs buffer early so it can be used by engine callbacks
-    in_memory_logs_buffer = InMemoryLogsBuffer(workflow_run_id)
-
     # Create node transition callback (always logs to buffer, optionally streams to WS)
-    ws_sender = get_ws_sender(workflow_run_id)
-
     # CALM used to be enabled only by the Sakinah simulation wrapper.  Keep
     # that explicit callback behaviour, but also enable the same runtime for
     # Sakinah live/test workflows so WebRTC and inbound voice calls receive
@@ -1118,6 +1189,7 @@ async def _run_pipeline_impl(
             engine=engine,
             organization_id=workflow.organization_id,
             identity=sakinah_identity_context,
+            emit_action_event=emit_sakinah_action_event,
         )
         sakinah_secure_input = SakinahSecureInputProcessor(sakinah_identity_runtime)
         sakinah_user_observer = SakinahIdentityUserObserver(sakinah_identity_runtime)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime
@@ -27,6 +28,14 @@ CONTINUITY_STATES = {
 _DIGIT_RUN = re.compile(r"\b\d{4,}\b")
 
 
+def internal_reference(value: object, *, prefix: str = "ref") -> str | None:
+    """Return a stable, non-sensitive correlation reference for observability."""
+    if value is None or str(value).strip() == "":
+        return None
+    digest = hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}:{digest}"
+
+
 def normalize_workflow_name(name: str | None) -> str:
     return " ".join((name or "").split()).lower()
 
@@ -50,10 +59,19 @@ def safe_identity_context(
     service_user_id: str | None = None,
     caller_identifier_id: str | None = None,
     pin_required: bool = False,
+    lookup_status: str = "unavailable",
+    caller_result: str = "unknown",
 ) -> dict[str, Any]:
     """Build only safe state; no names, PINs, hashes or historical text."""
     return {
         "caller_status": state,
+        "caller_result": caller_result,
+        "lookup_status": lookup_status,
+        "session_access_mode": (
+            "returning_profile"
+            if caller_result == "returning"
+            else "new_profile" if caller_result == "new" else "unknown_profile"
+        ),
         "service_user_id": service_user_id,
         "caller_identifier_id": caller_identifier_id,
         "pin_required": pin_required,
@@ -61,6 +79,12 @@ def safe_identity_context(
         "identity_access_authorised": False,
         "continuity_authorised": False,
         "continuity_available": False,
+        "continuity_choice": None,
+        "retrieval_status": "unavailable",
+        "previous_calls_loaded": 0,
+        "durable_facts_loaded": 0,
+        "raw_transcripts_loaded": False,
+        "raw_transcripts_injected": False,
         "memory_available": False,
         "memory_authorisation_level": "none",
         "memory_context": (
@@ -76,7 +100,7 @@ async def prepare_sakinah_identity(
 ) -> dict[str, Any]:
     """Resolve a possible caller and determine whether a PIN gate is needed."""
     if not MEMORY_ENABLED or not organization_id:
-        return safe_identity_context(state="UNKNOWN")
+        return safe_identity_context(state="UNKNOWN", lookup_status="unavailable")
     identifier = next(
         (
             str(call_context[key])
@@ -85,8 +109,8 @@ async def prepare_sakinah_identity(
         ),
         None,
     )
-    if not identifier:
-        return safe_identity_context(state="UNKNOWN")
+    if not identifier or not re.search(r"\d{3,}", identifier):
+        return safe_identity_context(state="UNKNOWN", lookup_status="unavailable")
     try:
         resolution = await db_client.resolve_caller_identity(
             organization_id,
@@ -94,8 +118,10 @@ async def prepare_sakinah_identity(
         )
         if resolution.created:
             state = "FIRST_TIME"
+            caller_result = "new"
             pin_required = False
         else:
+            caller_result = "returning"
             has_pin = await db_client.has_active_sakinah_pin(
                 organization_id=organization_id,
                 service_user_id=resolution.service_user.id,
@@ -107,6 +133,8 @@ async def prepare_sakinah_identity(
             service_user_id=resolution.service_user.id,
             caller_identifier_id=resolution.caller_identifier.id,
             pin_required=pin_required,
+            lookup_status="success",
+            caller_result=caller_result,
         )
         logger.bind(event="returning_caller_candidate").info(
             "Sakinah caller candidate resolved"
@@ -114,7 +142,7 @@ async def prepare_sakinah_identity(
         return result
     except Exception:  # noqa: BLE001 - identity enrichment must not block calls
         logger.warning("Sakinah identity lookup failed; continuing without history")
-        return safe_identity_context(state="UNKNOWN")
+        return safe_identity_context(state="UNKNOWN", lookup_status="error")
 
 
 def _redact_numeric_runs(text: str) -> str:
@@ -162,6 +190,7 @@ def build_bounded_continuity_context(
             {
                 "workflow_run_id": run.id,
                 "started_at": _iso(run.started_at),
+                "completed_at": _iso(getattr(run, "ended_at", None)),
                 "summary": _summary_for_run(
                     run, (utterances_by_run or {}).get(run.id)
                 ),
@@ -232,6 +261,17 @@ async def retrieve_bounded_continuity(
             return {
                 "continuity_authorised": True,
                 "continuity_available": False,
+                "retrieval_status": "unavailable",
+                "previous_calls_requested": 2,
+                "previous_calls_loaded": 0,
+                "durable_facts_requested": True,
+                "durable_facts_loaded": 0,
+                "raw_transcripts_loaded": False,
+                "raw_transcripts_injected": False,
+                "storage_source": "backend_continuity_service",
+                "bounded_context_ref": internal_reference(
+                    current_run_id, prefix="continuity"
+                ),
                 "previous_calls": [],
                 "durable_facts": [],
                 "previous_plans": [],
@@ -256,6 +296,21 @@ async def retrieve_bounded_continuity(
         bounded["continuity_available"] = bool(
             bounded["previous_calls"] or bounded["durable_facts"]
         )
+        bounded.update(
+            {
+                "retrieval_status": "available",
+                "previous_calls_requested": 2,
+                "previous_calls_loaded": len(bounded["previous_calls"]),
+                "durable_facts_requested": True,
+                "durable_facts_loaded": len(bounded["durable_facts"]),
+                "raw_transcripts_loaded": False,
+                "raw_transcripts_injected": False,
+                "storage_source": "backend_continuity_service",
+                "bounded_context_ref": internal_reference(
+                    current_run_id, prefix="continuity"
+                ),
+            }
+        )
         logger.bind(event="continuity_retrieval_success").info(
             "Sakinah continuity retrieval completed; previous_calls={} memories={}",
             len(bounded["previous_calls"]),
@@ -278,6 +333,17 @@ async def retrieve_bounded_continuity(
         return {
             "continuity_authorised": True,
             "continuity_available": False,
+            "retrieval_status": "error",
+            "previous_calls_requested": 2,
+            "previous_calls_loaded": 0,
+            "durable_facts_requested": True,
+            "durable_facts_loaded": 0,
+            "raw_transcripts_loaded": False,
+            "raw_transcripts_injected": False,
+            "storage_source": "backend_continuity_service",
+            "bounded_context_ref": internal_reference(
+                current_run_id, prefix="continuity"
+            ),
             "previous_calls": [],
             "durable_facts": [],
             "previous_plans": [],

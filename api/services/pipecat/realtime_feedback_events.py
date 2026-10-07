@@ -1,8 +1,11 @@
 """Shared helpers for building and ordering realtime feedback events."""
 
+from datetime import UTC, datetime
 from typing import Any
 
 from pipecat.utils.enums import RealtimeFeedbackType
+
+SAKINAH_CONTINUITY_ACTION_EVENT_TYPE = "rtf-sakinah-continuity-action"
 
 
 def build_node_transition_event(
@@ -141,6 +144,45 @@ def build_pipeline_error_event(
     return {
         "type": RealtimeFeedbackType.PIPELINE_ERROR.value,
         "payload": payload,
+    }
+
+
+def build_sakinah_continuity_action_event(
+    *,
+    action: str,
+    call_id: str,
+    turn_id: int | None,
+    status: str,
+    details: dict[str, Any],
+    timestamp: str | None = None,
+) -> dict[str, Any]:
+    """Build a deterministic, internal-only Sakinah observability event.
+
+    Action events deliberately use the existing real-time feedback envelope so
+    they share WebSocket delivery, persisted logs, turn correlation, and export
+    ordering with the rest of the runtime trace. They are not transcript
+    utterances and must never be converted into caller/assistant text.
+    """
+    event_timestamp = timestamp or datetime.now(UTC).isoformat(timespec="milliseconds")
+    event_id = f"{call_id}:{turn_id if turn_id is not None else 'call'}:{action}"
+    return {
+        "type": SAKINAH_CONTINUITY_ACTION_EVENT_TYPE,
+        "timestamp": event_timestamp,
+        "payload": {
+            "event_type": "sakinah.continuity.action",
+            "action": action,
+            "call_id": call_id,
+            "turn_id": turn_id,
+            "timestamp": event_timestamp,
+            "display": {
+                "surface": "transcript_and_turn_report",
+                "style": "highlighted_box",
+                "visibility": "internal",
+            },
+            "status": status,
+            "details": details,
+            "action_event_id": event_id,
+        },
     }
 
 

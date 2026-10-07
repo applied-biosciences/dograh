@@ -70,6 +70,19 @@ function liveFeedbackItem(message: RealtimeFeedbackMessage, reasoningDurationMs?
         };
     }
 
+    if (message.type === "sakinah-continuity-action") {
+        return {
+            kind: "action-event",
+            id: message.actionEventId ?? message.id,
+            timestamp: message.timestamp,
+            action: message.action ?? "continuity action",
+            status: message.actionStatus ?? "unavailable",
+            callId: message.callId,
+            turnId: message.turnId,
+            details: message.actionDetails ?? {},
+        };
+    }
+
     if (message.type === "interrupt-warning") {
         return {
             kind: "notice",
@@ -181,7 +194,7 @@ export function conversationItemsFromRealtimeFeedbackEvents(events: RealtimeFeed
                 reasoningDurationMs: pendingReasoningDurationMs,
             });
             currentBotItemIndex = items.length - 1;
-            currentBotTurn = event.turn;
+            currentBotTurn = event.turn ?? null;
             pendingReasoningDurationMs = undefined;
             return;
         }
@@ -248,6 +261,20 @@ export function conversationItemsFromRealtimeFeedbackEvents(events: RealtimeFeed
                 previousNodeId: event.payload.previous_node_id,
                 previousNodeName: event.payload.previous_node_name ?? event.payload.previous_node,
                 allowInterrupt: event.payload.allow_interrupt,
+            });
+            return;
+        }
+
+        if (event.type === "rtf-sakinah-continuity-action") {
+            items.push({
+                kind: "action-event",
+                id: event.payload.action_event_id ?? `action-${event.turn}-${index}`,
+                timestamp: event.timestamp,
+                action: event.payload.action ?? "continuity action",
+                status: event.payload.status ?? "unavailable",
+                callId: event.payload.call_id,
+                turnId: event.payload.turn_id ?? event.turn ?? null,
+                details: event.payload.details ?? {},
             });
             return;
         }

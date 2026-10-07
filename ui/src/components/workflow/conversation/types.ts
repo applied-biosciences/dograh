@@ -7,7 +7,8 @@ export type RealtimeFeedbackMessageType =
     | "node-transition"
     | "ttfb-metric"
     | "pipeline-error"
-    | "interrupt-warning";
+    | "interrupt-warning"
+    | "sakinah-continuity-action";
 
 export interface RealtimeFeedbackMessage {
     id: string;
@@ -29,6 +30,12 @@ export interface RealtimeFeedbackMessage {
     processor?: string;
     model?: string;
     fatal?: boolean;
+    action?: string;
+    actionStatus?: "success" | "bypassed" | "unavailable" | "error";
+    actionDetails?: Record<string, unknown>;
+    actionEventId?: string;
+    callId?: string;
+    turnId?: number | null;
 }
 
 export interface RealtimeFeedbackEvent {
@@ -54,9 +61,21 @@ export interface RealtimeFeedbackEvent {
         model?: string;
         error?: string;
         fatal?: boolean;
+        event_type?: string;
+        action?: string;
+        call_id?: string;
+        turn_id?: number | null;
+        display?: {
+            surface?: string;
+            style?: string;
+            visibility?: string;
+        };
+        status?: "success" | "bypassed" | "unavailable" | "error";
+        details?: Record<string, unknown>;
+        action_event_id?: string;
     };
     timestamp: string;
-    turn: number;
+    turn?: number;
 }
 
 export interface WorkflowRunLogs {
@@ -66,7 +85,7 @@ export interface WorkflowRunLogs {
 interface ConversationItemBase {
     id: string;
     timestamp?: string;
-    turnId?: string;
+    turnId?: string | number | null;
     reasoningDurationMs?: number;
 }
 
@@ -106,10 +125,20 @@ export interface ConversationNoticeItem extends ConversationItemBase {
     linkLabel?: string;
 }
 
+export interface ConversationActionItem extends ConversationItemBase {
+    kind: "action-event";
+    action: string;
+    status: "success" | "bypassed" | "unavailable" | "error";
+    callId?: string;
+    turnId?: number | null;
+    details: Record<string, unknown>;
+}
+
 export type ConversationItem =
     | ConversationMessageItem
     | ConversationToolCallItem
     | ConversationNodeTransitionItem
+    | ConversationActionItem
     | ConversationNoticeItem;
 
 export interface ConversationEmptyStateData {

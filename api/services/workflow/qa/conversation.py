@@ -106,6 +106,8 @@ def split_events_by_node(
     node_names: dict[str, str] = {}
 
     for event in rtf_events:
+        if event.get("type") == "rtf-sakinah-continuity-action":
+            continue
         node_id = event.get("node_id")
         if not node_id:
             return []  # Events lack node_id — caller should fall back

@@ -620,6 +620,31 @@ export const useWebSocketRTC = ({ workflowId, workflowRunId, accessToken, initia
                             break;
                         }
 
+                        case 'rtf-sakinah-continuity-action': {
+                            const {
+                                action,
+                                status,
+                                details,
+                                action_event_id,
+                                call_id,
+                                turn_id,
+                                timestamp,
+                            } = message.payload;
+                            setFeedbackMessages(prev => [...prev, {
+                                id: action_event_id ?? `sakinah-action-${Date.now()}`,
+                                type: 'sakinah-continuity-action',
+                                text: action ?? 'continuity action',
+                                action,
+                                actionStatus: status,
+                                actionDetails: details,
+                                actionEventId: action_event_id,
+                                callId: call_id,
+                                turnId: turn_id,
+                                timestamp: timestamp ?? new Date().toISOString(),
+                            }]);
+                            break;
+                        }
+
                         case 'rtf-node-transition': {
                             const {
                                 node_id,
