@@ -10,7 +10,7 @@ import pytest
 from data_explorer.audit import FileAuditSink
 from data_explorer.config import Settings
 from data_explorer.main import build_call_export, create_app
-from data_explorer.storage import ObjectNotAvailable, S3ObjectStore, safe_filename
+from data_explorer.storage import ObjectNotAvailable, S3ObjectStore, browsable_key, safe_filename
 
 
 CALL = {
@@ -44,6 +44,8 @@ class FakeStore:
     async def bytes(self, key, max_bytes):
         if "missing" in key: raise ObjectNotAvailable()
         return b"audio bytes"
+    async def list_objects(self, *, prefix, continuation_token, page_size):
+        return {"items": [{"object_key": f"{prefix}call.wav", "file_name": "call.wav", "size_bytes": 4, "last_modified": "2026-01-01T00:00:00+00:00"}], "next_cursor": None}
 
 
 class MissingObjectStore(FakeStore):
@@ -138,6 +140,16 @@ async def test_missing_object_does_not_return_a_signed_url(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_aws_storage_browser_lists_and_downloads_objects(client):
+    listed = await client.get("/api/storage/objects?prefix=recordings/", headers=auth())
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["object_key"] == "recordings/call.wav"
+    download = await client.get("/api/storage/objects/download?key=recordings/call.wav&return_url=true", headers=auth())
+    assert download.status_code == 200
+    assert download.json()["url"].startswith("https://object.test/")
+
+
+@pytest.mark.asyncio
 async def test_schema_and_permission_evidence(client):
     assert (await client.get("/api/schema", headers=auth())).json()["tables"]
     status = (await client.get("/api/read-only-status", headers=auth())).json()
@@ -147,6 +159,8 @@ async def test_schema_and_permission_evidence(client):
 
 def test_filename_sanitisation_prevents_path_traversal():
     assert safe_filename("../../unsafe/recording.wav") == "recording.wav"
+    with pytest.raises(ObjectNotAvailable):
+        browsable_key("private/other-object.json")
     assert safe_filename("..\\evil.mp3") == "evil.mp3"
 
 

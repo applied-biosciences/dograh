@@ -11,6 +11,23 @@ from botocore.exceptions import BotoCoreError, ClientError
 from .config import Settings
 
 
+_BROWSABLE_PREFIXES = (
+    "recordings/",
+    "transcripts/",
+    "calm-scoring/",
+    "scores/",
+    "deployment-smoke/",
+)
+
+
+def browsable_key(key: str) -> str:
+    """Validate an object key accepted by the AWS storage-browser endpoints."""
+    normalized = key.strip().lstrip("/")
+    if ".." in normalized.split("/") or not normalized.startswith(_BROWSABLE_PREFIXES):
+        raise ObjectNotAvailable("Object key is outside the Explorer storage scope")
+    return normalized
+
+
 class ObjectNotAvailable(Exception):
     pass
 
@@ -63,6 +80,47 @@ class S3ObjectStore:
         if not self.key_prefix or normalized.startswith(f"{self.key_prefix}/"):
             return normalized
         return f"{self.key_prefix}/{normalized}"
+
+    def _logical_key(self, key: str) -> str:
+        if self.key_prefix and key.startswith(f"{self.key_prefix}/"):
+            return key[len(self.key_prefix) + 1:]
+        return key
+
+    @staticmethod
+    def _validate_browsable_key(key: str) -> str:
+        return browsable_key(key)
+
+    async def list_objects(
+        self, *, prefix: str = "recordings/", continuation_token: str | None = None, page_size: int = 50
+    ) -> dict:
+        """List a bounded, allowlisted page of private bucket objects."""
+        logical_prefix = self._validate_browsable_key(prefix)
+        if continuation_token and len(continuation_token) > 4096:
+            raise ObjectNotAvailable("Invalid object listing cursor")
+        try:
+            request = {
+                "Bucket": self._require_bucket(),
+                "Prefix": self._object_key(logical_prefix),
+                "MaxKeys": min(100, max(1, page_size)),
+            }
+            if continuation_token:
+                request["ContinuationToken"] = continuation_token
+            async with self.session.client("s3", **self._client_kwargs()) as client:
+                response = await client.list_objects_v2(**request)
+            return {
+                "items": [
+                    {
+                        "object_key": self._logical_key(item["Key"]),
+                        "file_name": safe_filename(item["Key"]),
+                        "size_bytes": item.get("Size"),
+                        "last_modified": item["LastModified"].isoformat() if item.get("LastModified") else None,
+                    }
+                    for item in response.get("Contents", [])
+                ],
+                "next_cursor": response.get("NextContinuationToken"),
+            }
+        except (BotoCoreError, ClientError) as exc:
+            raise ObjectNotAvailable("Bucket objects are unavailable") from exc
 
     async def metadata(self, key: str) -> ObjectMetadata:
         try:

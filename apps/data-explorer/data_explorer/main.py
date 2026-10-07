@@ -16,7 +16,7 @@ from .audit import FileAuditSink
 from .auth import AdminPrincipal, require_admin
 from .config import Settings
 from .repository import ExplorerRepository
-from .storage import ObjectNotAvailable, S3ObjectStore, safe_filename
+from .storage import ObjectNotAvailable, S3ObjectStore, browsable_key, safe_filename
 
 
 def _not_found(kind: str) -> HTTPException:
@@ -264,6 +264,37 @@ def create_app(
     async def read_only_status(principal: AdminPrincipal = Depends(admin_dependency)) -> dict:
         await audit(principal, "read_only_status_viewed")
         return await repository.readonly_status()
+
+    @app.get("/api/storage/objects")
+    async def list_storage_objects(
+        prefix: str = "recordings/",
+        cursor: str | None = None,
+        page_size: int = Query(default=50, ge=1, le=100),
+        principal: AdminPrincipal = Depends(admin_dependency),
+    ) -> dict:
+        try:
+            objects = await object_store.list_objects(prefix=prefix, continuation_token=cursor, page_size=page_size)
+        except ObjectNotAvailable as exc:
+            raise HTTPException(status_code=404, detail="AWS object storage is unavailable") from exc
+        await audit(principal, "aws_objects_listed")
+        return objects
+
+    @app.get("/api/storage/objects/download")
+    async def download_storage_object(
+        key: str,
+        inline: bool = False,
+        return_url: bool = False,
+        principal: AdminPrincipal = Depends(admin_dependency),
+    ):
+        try:
+            key = browsable_key(key)
+            url = await object_store.presigned_download(key, safe_filename(key), inline=inline)
+        except ObjectNotAvailable as exc:
+            raise HTTPException(status_code=404, detail="Requested AWS object is unavailable") from exc
+        await audit(principal, "aws_object_downloaded")
+        if return_url:
+            return {"url": url, "expires_in": settings.presign_expiry_seconds}
+        return RedirectResponse(url, status_code=307)
 
     @app.get("/", include_in_schema=False)
     async def ui() -> FileResponse:
