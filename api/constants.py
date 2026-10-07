@@ -78,9 +78,27 @@ STACK_PUBLISHABLE_CLIENT_KEY = os.getenv("STACK_PUBLISHABLE_CLIENT_KEY")
 DOGRAH_MPS_SECRET_KEY = os.getenv("DOGRAH_MPS_SECRET_KEY", None)
 MPS_API_URL = os.getenv("MPS_API_URL", "https://services.dograh.com")
 DOGRAH_DEVOPS_SECRET = os.getenv("DOGRAH_DEVOPS_SECRET") or None
+WHATSAPP_WEBHOOK_VERIFY_TOKEN = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN") or None
 
 # Storage Configuration
-ENABLE_AWS_S3 = os.getenv("ENABLE_AWS_S3", "false").lower() == "true"
+# MinIO is the CALMOS primary artifact store in every standard deployment.
+# ``ENABLE_AWS_S3`` was the pre-Stage-C switch for replacing it outright and
+# is retained only so operators can identify stale environment files.  It is
+# deliberately *not* a primary-storage selector: setting it must never divert
+# a successful call away from the bundled MinIO store.
+LEGACY_ENABLE_AWS_S3 = os.getenv("ENABLE_AWS_S3", "false").lower() == "true"
+# Explicit opt-in for installations that intentionally use S3 as their sole
+# primary object store. CALMOS deployments should leave this false and use the
+# secondary-copy flag below instead.
+ENABLE_AWS_S3_PRIMARY = (
+    os.getenv("ENABLE_AWS_S3_PRIMARY", "false").lower() == "true"
+)
+# Stage C keeps MinIO as the primary artifact store and optionally schedules a
+# best-effort asynchronous copy to AWS S3. It is deliberately disabled by
+# default so local OSS development has no AWS network dependency.
+ENABLE_AWS_S3_SECONDARY = (
+    os.getenv("ENABLE_AWS_S3_SECONDARY", "false").lower() == "true"
+)
 
 # MinIO Configuration
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
@@ -93,19 +111,38 @@ MINIO_PUBLIC_ENDPOINT = (
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "voice-audio")
+# MinIO deployments default to the us-east-1 signing region. Supplying this
+# to the browser-facing client avoids a GetBucketLocation request against the
+# public endpoint from inside the API container (where localhost is the API,
+# not MinIO).
+MINIO_REGION = os.getenv("MINIO_REGION", "us-east-1")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
+# Anonymous object access is a local-development compatibility option only.
+# Production defaults to a private bucket and real presigned URLs.
+MINIO_ALLOW_ANONYMOUS = (
+    os.getenv(
+        "MINIO_ALLOW_ANONYMOUS",
+        "true" if ENVIRONMENT == Environment.LOCAL.value else "false",
+    ).lower()
+    == "true"
+)
 
 # AWS S3 Configuration
 AWS_REGION = os.environ.get("AWS_REGION") or os.environ.get("S3_REGION", "eu-west-2")
 # ``AWS_RECORDINGS_BUCKET`` is the white-label name. Keep ``S3_BUCKET`` as the
 # existing generic storage setting so existing deployments continue to work.
-AWS_RECORDINGS_BUCKET = os.environ.get("AWS_RECORDINGS_BUCKET")
-S3_BUCKET = AWS_RECORDINGS_BUCKET or os.environ.get("S3_BUCKET")
+# Both names identify the same configured AWS bucket; the dedicated name wins.
+AWS_RECORDINGS_BUCKET = os.environ.get("AWS_RECORDINGS_BUCKET") or os.environ.get(
+    "S3_BUCKET"
+)
+AWS_S3_PREFIX = os.environ.get("AWS_S3_PREFIX", "").strip("/")
+S3_BUCKET = AWS_RECORDINGS_BUCKET
 S3_REGION = AWS_REGION
 S3_KMS_KEY_ID = os.environ.get("S3_KMS_KEY_ID") or None
-S3_SERVER_SIDE_ENCRYPTION = os.environ.get(
-    "S3_SERVER_SIDE_ENCRYPTION", "aws:kms"
-)
+# Leave encryption to the bucket's default policy unless an explicit mode or
+# customer-managed KMS key is configured. This avoids requiring KMS IAM
+# permissions for buckets that already enforce SSE-S3 (AES256).
+S3_SERVER_SIDE_ENCRYPTION = os.environ.get("S3_SERVER_SIDE_ENCRYPTION", "")
 # Optional overrides for S3-compatible backends (e.g. MinIO, rustfs, Ceph).
 # S3_ENDPOINT_URL: full URL of a custom S3 endpoint (e.g. "https://s3.example.com").
 #   Leave unset to use AWS's default endpoint resolution.
@@ -122,12 +159,52 @@ S3_ADDRESSING_STYLE = os.environ.get("S3_ADDRESSING_STYLE")
 # environment-driven so the call path remains usable in local/OSS installs
 # without AWS credentials.
 MEMORY_ENABLED = os.getenv("MEMORY_ENABLED", "true").lower() == "true"
-MEMORY_EMBEDDING_MODEL = os.getenv(
-    "MEMORY_EMBEDDING_MODEL", "text-embedding-3-small"
+MEMORY_WORKFLOW_NAMES = {
+    " ".join(name.split()).lower()
+    for name in os.getenv(
+        "MEMORY_WORKFLOW_NAMES", "Sakinah Scenario Console"
+    ).split(",")
+    if name.strip()
+}
+MEMORY_REQUIRE_EXPLICIT_CONSENT = (
+    os.getenv("MEMORY_REQUIRE_EXPLICIT_CONSENT", "false").lower() == "true"
 )
+
+
+def _bounded_int_setting(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Read a bounded integer setting without allowing unsafe configuration."""
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return min(maximum, max(minimum, value))
+
+
+SAKINAH_PIN_ENABLED = os.getenv("SAKINAH_PIN_ENABLED", "true").lower() == "true"
+SAKINAH_PIN_LENGTH = _bounded_int_setting("SAKINAH_PIN_LENGTH", 4, 4, 12)
+SAKINAH_PIN_MAX_ATTEMPTS = _bounded_int_setting(
+    "SAKINAH_PIN_MAX_ATTEMPTS", 5, 1, 20
+)
+SAKINAH_PIN_LOCKOUT_SECONDS = _bounded_int_setting(
+    "SAKINAH_PIN_LOCKOUT_SECONDS", 900, 30, 86_400
+)
+
+
+def memory_workflow_allowed(name: str | None) -> bool:
+    return " ".join((name or "").split()).lower() in MEMORY_WORKFLOW_NAMES
+
+
+MEMORY_EMBEDDING_MODEL = os.getenv("MEMORY_EMBEDDING_MODEL", "text-embedding-3-small")
 MEMORY_EMBEDDING_DIMENSIONS = int(os.getenv("MEMORY_EMBEDDING_DIMENSIONS", "1536"))
 MEMORY_MAX_RESULTS = max(1, int(os.getenv("MEMORY_MAX_RESULTS", "5")))
 MEMORY_MIN_SIMILARITY = float(os.getenv("MEMORY_MIN_SIMILARITY", "0.72"))
+# Phone numbers have a small enough search space that an unkeyed SHA-256 hash
+# is reversible by enumeration. Use a stable, deployment-owned HMAC key. The
+# existing OSS JWT secret is a compatibility fallback; production deployments
+# should set the dedicated value so auth-key rotation cannot break lookups.
+CALLER_IDENTIFIER_HASH_KEY = os.getenv("CALLER_IDENTIFIER_HASH_KEY") or os.getenv(
+    "OSS_JWT_SECRET", "change-me-in-production"
+)
 RECORD_CALLS = os.getenv("RECORD_CALLS", "true").lower() == "true"
 
 # Sentry configuration
@@ -140,6 +217,16 @@ POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")
 
 ENABLE_ARI_STASIS = os.getenv("ENABLE_ARI_STASIS", "false").lower() == "true"
 SERIALIZE_LOG_OUTPUT = os.getenv("SERIALIZE_LOG_OUTPUT", "false").lower() == "true"
+
+# Whether the end-of-call audio recordings (mixed / user / bot tracks) are
+# uploaded to object storage. Deployments that must not retain call audio, or
+# that simply do not want to pay for the storage, can turn this off. The
+# transcript upload and every other artifact are unaffected. Audio is still
+# buffered in memory during the call (integrations such as Noveum consume it);
+# only the upload and the recording_url / recordings metadata are skipped.
+ENABLE_CALL_RECORDING_UPLOAD = (
+    os.getenv("ENABLE_CALL_RECORDING_UPLOAD", "true").lower() == "true"
+)
 
 # Telephony media WebSocket authentication.
 # The carrier/connector dials back the media socket

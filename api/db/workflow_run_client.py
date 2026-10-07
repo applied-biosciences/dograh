@@ -9,6 +9,8 @@ from sqlalchemy.orm import joinedload, selectinload
 from api.db.base_client import BaseDBClient
 from api.db.filters import apply_workflow_run_filters, get_workflow_run_order_clause
 from api.db.models import (
+    ArtifactReplicationStatusModel,
+    CallUtteranceModel,
     OrganizationModel,
     UserModel,
     WorkflowDefinitionModel,
@@ -21,7 +23,200 @@ from api.services.workflow.run_usage_response import format_public_cost_info
 from api.utils.recording_artifacts import get_recording_storage_key
 
 
+def append_unique_tags(existing_tags: object, new_tags: object) -> list:
+    """Union two call-tag lists, preserving order and dropping duplicates.
+
+    Every producer of ``call_tags`` appends and none removes, so a union is
+    always the intended result of two writers meeting.
+    """
+    tags = list(existing_tags) if isinstance(existing_tags, list) else []
+    for tag in new_tags if isinstance(new_tags, list) else []:
+        if tag not in tags:
+            tags.append(tag)
+    return tags
+
+
 class WorkflowRunClient(BaseDBClient):
+    async def get_last_two_eligible_previous_calls(
+        self,
+        *,
+        organization_id: int,
+        service_user_id: str,
+        current_run_id: int,
+    ) -> list[WorkflowRunModel]:
+        """Return the two newest completed, non-empty calls for one identity."""
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(WorkflowRunModel)
+                .join(WorkflowModel, WorkflowModel.id == WorkflowRunModel.workflow_id)
+                .where(
+                    WorkflowRunModel.service_user_id == service_user_id,
+                    WorkflowRunModel.id != current_run_id,
+                    WorkflowRunModel.is_completed.is_(True),
+                    WorkflowRunModel.started_at.is_not(None),
+                    WorkflowModel.organization_id == organization_id,
+                    or_(
+                        WorkflowRunModel.call_status.is_(None),
+                        WorkflowRunModel.call_status.notin_(
+                            ("failed", "error", "empty", "deleted")
+                        ),
+                    ),
+                    or_(
+                        func.length(func.trim(WorkflowRunModel.full_transcript)) > 0,
+                        select(CallUtteranceModel.id)
+                        .where(CallUtteranceModel.agent_run_id == WorkflowRunModel.id)
+                        .exists(),
+                    ),
+                )
+                .order_by(
+                    WorkflowRunModel.started_at.desc(),
+                    WorkflowRunModel.id.desc(),
+                )
+                .limit(2)
+            )
+            return list(result.scalars().all())
+
+    async def get_artifact_replications_for_run(
+        self, run_id: int, *, organization_id: int | None = None
+    ) -> list[ArtifactReplicationStatusModel]:
+        """Read copy results for a run, scoped like the parent run lookup."""
+        async with self.async_session() as session:
+            query = (
+                select(ArtifactReplicationStatusModel)
+                .join(
+                    WorkflowRunModel,
+                    WorkflowRunModel.id == ArtifactReplicationStatusModel.run_id,
+                )
+                .join(WorkflowModel, WorkflowModel.id == WorkflowRunModel.workflow_id)
+                .where(ArtifactReplicationStatusModel.run_id == run_id)
+            )
+            if organization_id is not None:
+                query = query.where(WorkflowModel.organization_id == organization_id)
+            result = await session.execute(query)
+            return list(result.scalars().all())
+
+    async def upsert_artifact_replication_status(
+        self,
+        *,
+        run_id: int,
+        artifact_type: str,
+        primary_backend: str,
+        primary_bucket: str | None,
+        primary_object_key: str,
+        s3_bucket: str | None,
+        s3_object_key: str | None,
+        checksum_sha256: str | None,
+        size_bytes: int | None,
+    ) -> ArtifactReplicationStatusModel:
+        """Create the durable primary-success record without touching call state."""
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(ArtifactReplicationStatusModel)
+                .where(
+                    ArtifactReplicationStatusModel.run_id == run_id,
+                    ArtifactReplicationStatusModel.artifact_type == artifact_type,
+                    ArtifactReplicationStatusModel.primary_object_key
+                    == primary_object_key,
+                )
+                .with_for_update()
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = ArtifactReplicationStatusModel(
+                    run_id=run_id,
+                    artifact_type=artifact_type,
+                    primary_saved=True,
+                    s3_saved=False,
+                    primary_backend=primary_backend,
+                    primary_bucket=primary_bucket,
+                    primary_object_key=primary_object_key,
+                    s3_bucket=s3_bucket,
+                    s3_object_key=s3_object_key,
+                    checksum_sha256=checksum_sha256,
+                    size_bytes=size_bytes,
+                    replication_status="pending",
+                )
+                session.add(row)
+            else:
+                if checksum_sha256 and row.checksum_sha256 != checksum_sha256:
+                    row.s3_saved = False
+                    row.replication_status = "pending"
+                    row.last_error_class = None
+                row.primary_saved = True
+                row.primary_backend = primary_backend
+                row.primary_bucket = primary_bucket
+                row.s3_bucket = s3_bucket
+                row.s3_object_key = s3_object_key
+                row.checksum_sha256 = checksum_sha256 or row.checksum_sha256
+                row.size_bytes = size_bytes if size_bytes is not None else row.size_bytes
+            await session.commit()
+            await session.refresh(row)
+            return row
+
+    async def update_artifact_replication_status(
+        self,
+        *,
+        run_id: int,
+        primary_object_key: str,
+        replication_status: str,
+        s3_saved: bool,
+        retry_count: int,
+        checksum_sha256: str | None = None,
+        size_bytes: int | None = None,
+        last_error_class: str | None = None,
+        uploaded: bool = False,
+    ) -> ArtifactReplicationStatusModel | None:
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(ArtifactReplicationStatusModel)
+                .where(
+                    ArtifactReplicationStatusModel.run_id == run_id,
+                    ArtifactReplicationStatusModel.primary_object_key
+                    == primary_object_key,
+                )
+                .with_for_update()
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                return None
+            if checksum_sha256 and row.checksum_sha256 and row.checksum_sha256 != checksum_sha256:
+                # A newer live CALM snapshot replaced this object's bytes.
+                # An older replication job must not overwrite its status.
+                return row
+            row.replication_status = replication_status
+            row.s3_saved = s3_saved
+            row.retry_count = retry_count
+            row.last_attempt_at = datetime.now(UTC)
+            row.last_error_class = last_error_class
+            if checksum_sha256:
+                row.checksum_sha256 = checksum_sha256
+            if size_bytes is not None:
+                row.size_bytes = size_bytes
+            if uploaded:
+                row.s3_uploaded_at = datetime.now(UTC)
+                row.last_error_class = None
+            await session.commit()
+            await session.refresh(row)
+            return row
+
+    async def get_pending_artifact_replications(
+        self, limit: int = 100
+    ) -> list[ArtifactReplicationStatusModel]:
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(ArtifactReplicationStatusModel)
+                .where(
+                    ArtifactReplicationStatusModel.primary_saved.is_(True),
+                    ArtifactReplicationStatusModel.s3_saved.is_(False),
+                    ArtifactReplicationStatusModel.replication_status.in_(
+                        ("pending", "failed", "retry_pending")
+                    ),
+                )
+                .order_by(ArtifactReplicationStatusModel.updated_at.asc())
+                .limit(limit)
+            )
+            return list(result.scalars().all())
+
     async def create_workflow_run(
         self,
         name: str,
@@ -69,18 +264,19 @@ class WorkflowRunClient(BaseDBClient):
                         f"workflow {workflow.id}"
                     )
 
-            # Get the current storage backend based on ENABLE_AWS_S3 flag
+            # The explicit primary backend is MinIO for CALMOS unless an
+            # operator deliberately opts into S3-primary storage.
             current_backend = StorageBackend.get_current_backend()
             initial_context = initial_context or {}
             gathered_context = gathered_context or {}
             started_at = datetime.now(UTC)
             direction = initial_context.get("direction") or call_type.value
-            caller_identifier = initial_context.get("caller_number") or initial_context.get(
-                "from_number"
-            )
-            telephone_number = initial_context.get("phone_number") or initial_context.get(
-                "called_number"
-            )
+            caller_identifier = initial_context.get(
+                "caller_number"
+            ) or initial_context.get("from_number")
+            telephone_number = initial_context.get(
+                "phone_number"
+            ) or initial_context.get("called_number")
             runtime_configuration = initial_context.get("runtime_configuration") or {}
 
             new_run = WorkflowRunModel(
@@ -100,11 +296,13 @@ class WorkflowRunClient(BaseDBClient):
                 scenario_name=initial_context.get("scenario_name")
                 or initial_context.get("scenario"),
                 caller_identifier=caller_identifier,
+                caller_state="UNKNOWN",
                 telephone_number=telephone_number,
                 direction=direction,
                 started_at=started_at,
                 call_status="initialized",
                 telephony_provider=initial_context.get("provider") or mode,
+                provider_call_id=initial_context.get("provider_call_id"),
                 model_provider=runtime_configuration.get("llm_provider")
                 or runtime_configuration.get("realtime_provider"),
                 stt_provider=runtime_configuration.get("stt_provider"),
@@ -189,6 +387,7 @@ class WorkflowRunClient(BaseDBClient):
                 formatted_runs.append(
                     {
                         "id": run.id,
+                        "call_id": run.call_id,
                         "name": run.name,
                         "workflow_id": run.workflow_id,
                         "workflow_name": run.workflow.name if run.workflow else None,
@@ -382,6 +581,8 @@ class WorkflowRunClient(BaseDBClient):
         scenario_id: str | None = None,
         scenario_name: str | None = None,
         service_user_id: str | None = None,
+        caller_identifier_id: str | None = None,
+        caller_state: str | None = None,
         caller_identifier: str | None = None,
         telephone_number: str | None = None,
         direction: str | None = None,
@@ -391,6 +592,7 @@ class WorkflowRunClient(BaseDBClient):
         duration_seconds: float | None = None,
         call_status: str | None = None,
         telephony_provider: str | None = None,
+        provider_call_id: str | None = None,
         model_provider: str | None = None,
         stt_provider: str | None = None,
         tts_provider: str | None = None,
@@ -400,9 +602,12 @@ class WorkflowRunClient(BaseDBClient):
         recording_format: str | None = None,
         recording_size_bytes: int | None = None,
         full_transcript: str | None = None,
+        transcript_object_key: str | None = None,
+        latency_metrics: dict | None = None,
         termination_reason: str | None = None,
         debug_metadata: dict | None = None,
-    ) -> WorkflowRunModel:
+        only_if_incomplete: bool = False,
+    ) -> WorkflowRunModel | None:
         async with self.async_session() as session:
             # Use SELECT FOR UPDATE to lock the row during the update
             result = await session.execute(
@@ -413,6 +618,8 @@ class WorkflowRunClient(BaseDBClient):
             run = result.scalars().first()
             if not run:
                 raise ValueError(f"Workflow run with ID {run_id} not found")
+            if only_if_incomplete and run.is_completed:
+                return None
             if recording_url:
                 run.recording_url = recording_url
             if transcript_url:
@@ -435,22 +642,43 @@ class WorkflowRunClient(BaseDBClient):
                     **(run.initial_context or {}),
                     **initial_context,
                 }
-                context_caller = run.initial_context.get("caller_number") or run.initial_context.get("from_number")
-                context_phone = run.initial_context.get("phone_number") or run.initial_context.get("called_number")
+                context_caller = run.initial_context.get(
+                    "caller_number"
+                ) or run.initial_context.get("from_number")
+                context_phone = run.initial_context.get(
+                    "phone_number"
+                ) or run.initial_context.get("called_number")
                 if run.caller_identifier is None and context_caller:
                     run.caller_identifier = str(context_caller)
                 if run.telephone_number is None and context_phone:
                     run.telephone_number = str(context_phone)
                 if run.direction is None and run.initial_context.get("direction"):
                     run.direction = str(run.initial_context["direction"])
-                if run.telephony_provider is None and run.initial_context.get("provider"):
+                if run.telephony_provider is None and run.initial_context.get(
+                    "provider"
+                ):
                     run.telephony_provider = str(run.initial_context["provider"])
             if gathered_context:
                 # Lets merge the incoming gathered context keys with the existing ones
-                run.gathered_context = {
+                merged = {
                     **run.gathered_context,
                     **gathered_context,
                 }
+                # `call_tags` is a list, so the key merge above replaces it
+                # wholesale. Two writers each hold their own snapshot of a
+                # finishing run -- the engine's `_gathered_context` and the copy
+                # `on_pipeline_finished` takes via `get_gathered_context` -- and
+                # whichever lands second was dropping the other's tags. Union
+                # them so a call keeps both its disposition and `user_speech`.
+                tags = append_unique_tags(
+                    run.gathered_context.get("call_tags"),
+                    gathered_context.get("call_tags"),
+                )
+                if tags:
+                    merged["call_tags"] = tags
+                run.gathered_context = merged
+                if run.provider_call_id is None and gathered_context.get("call_id"):
+                    run.provider_call_id = str(gathered_context["call_id"])
             if logs:
                 # Lets merge the incoming logs key with existing ones
                 run.logs = {**run.logs, **logs}
@@ -462,6 +690,8 @@ class WorkflowRunClient(BaseDBClient):
                 ("scenario_id", scenario_id),
                 ("scenario_name", scenario_name),
                 ("service_user_id", service_user_id),
+                ("caller_identifier_id", caller_identifier_id),
+                ("caller_state", caller_state),
                 ("caller_identifier", caller_identifier),
                 ("telephone_number", telephone_number),
                 ("direction", direction),
@@ -471,6 +701,7 @@ class WorkflowRunClient(BaseDBClient):
                 ("duration_seconds", duration_seconds),
                 ("call_status", call_status),
                 ("telephony_provider", telephony_provider),
+                ("provider_call_id", provider_call_id),
                 ("model_provider", model_provider),
                 ("stt_provider", stt_provider),
                 ("tts_provider", tts_provider),
@@ -480,10 +711,13 @@ class WorkflowRunClient(BaseDBClient):
                 ("recording_format", recording_format),
                 ("recording_size_bytes", recording_size_bytes),
                 ("full_transcript", full_transcript),
+                ("transcript_object_key", transcript_object_key),
                 ("termination_reason", termination_reason),
             ):
                 if value is not None:
                     setattr(run, attribute, value)
+            if latency_metrics is not None:
+                run.latency_metrics = latency_metrics
             if debug_metadata:
                 run.debug_metadata = {**(run.debug_metadata or {}), **debug_metadata}
             if is_completed:
@@ -589,9 +823,9 @@ class WorkflowRunClient(BaseDBClient):
         """
         async with self.async_session() as session:
             result = await session.execute(
-                select(WorkflowRunModel).where(
-                    WorkflowRunModel.public_access_token == token
-                )
+                select(WorkflowRunModel)
+                .options(joinedload(WorkflowRunModel.workflow))
+                .where(WorkflowRunModel.public_access_token == token)
             )
             return result.scalars().first()
 
@@ -617,7 +851,8 @@ class WorkflowRunClient(BaseDBClient):
                 .where(
                     or_(
                         WorkflowRunModel.call_id == call_id,
-                        WorkflowRunModel.gathered_context.op("->>")("call_id") == call_id,
+                        WorkflowRunModel.gathered_context.op("->>")("call_id")
+                        == call_id,
                     )
                 )
                 .order_by(WorkflowRunModel.created_at.desc())

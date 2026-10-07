@@ -14,8 +14,8 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { PostHogEvent } from '@/constants/posthog-events';
-import { downloadFile, getSignedUrl } from '@/lib/files';
 import { getCallReplay } from '@/lib/callHistory';
+import { downloadFile, getSignedUrl } from '@/lib/files';
 
 export function MediaPreviewDialog() {
     const [isOpen, setIsOpen] = useState(false);
@@ -40,12 +40,17 @@ export function MediaPreviewDialog() {
             if (callId) {
                 try {
                     const replay = await getCallReplay(callId);
-                    setAudioSignedUrl(replay.recording_signed_url);
-                    setTranscriptContent(replay.transcript);
+                    const fallbackRecording = replay.recordings.find((item) => item.track === 'mixed')
+                        ?? replay.recordings[0];
+                    const transcript = replay.transcript ?? replay.utterances
+                        .map((item) => `${item.speaker}: ${item.transcript}`)
+                        .join('\n');
+                    setAudioSignedUrl(replay.recording_signed_url ?? fallbackRecording?.signed_url ?? null);
+                    setTranscriptContent(transcript || null);
                     posthog.capture(PostHogEvent.TRANSCRIPT_VIEWED, {
                         run_id: runId,
                         source: 'call_replay',
-                        transcript_length: replay.transcript?.length ?? 0,
+                        transcript_length: transcript.length,
                     });
                 } catch (error) {
                     console.error('Error loading call replay:', error);
@@ -56,7 +61,10 @@ export function MediaPreviewDialog() {
             }
 
             const [audioResult, transcriptResult] = await Promise.all([
-                recordingUrl ? getSignedUrl(recordingUrl) : null,
+                // Request an inline, typed response. Historic recordings may
+                // have been stored as application/octet-stream; Safari does
+                // not reliably preview those WAV bytes in an <audio> element.
+                recordingUrl ? getSignedUrl(recordingUrl, true) : null,
                 transcriptUrl ? getSignedUrl(transcriptUrl, true) : null,
             ]);
 

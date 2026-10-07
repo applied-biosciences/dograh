@@ -365,10 +365,20 @@ async def create_session(
     scenario = request.scenario.strip()
     if not scenario:
         raise HTTPException(status_code=422, detail="Scenario cannot be blank")
+    if user.selected_organization_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Select an organization before starting a Sakinah scenario.",
+        )
 
     session_id = uuid.uuid4()
     started_at = datetime.now(UTC)
     workflow = await ensure_sakinah_workflow(db_client, user)
+    if workflow is None:
+        raise HTTPException(
+            status_code=503,
+            detail="The Sakinah scenario workflow is unavailable. Please try again.",
+        )
     initial_context = {
         "scenario": scenario,
         "session_id": str(session_id),
@@ -512,6 +522,11 @@ async def start_simulation(
     scenario = request.scenario.strip()
     if not scenario:
         raise HTTPException(status_code=422, detail="Scenario cannot be blank")
+    if user.selected_organization_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Select an organization before starting a Sakinah simulation.",
+        )
 
     try:
         simulation = await simulation_manager.start_simulation(
@@ -524,6 +539,20 @@ async def start_simulation(
         )
     except SimulationAuthorizationError as e:
         raise HTTPException(status_code=402, detail=str(e)) from None
+    except ValueError as e:
+        # Configuration/request errors should be actionable in the console;
+        # leaking them as a generic 500 leaves users with no way to recover.
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    except Exception:
+        logger.exception("Failed to start Sakinah simulation")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The Sakinah simulation could not start. Check that both the "
+                "Sakinah and service-user agents have valid AI model "
+                "configuration, then try again."
+            ),
+        ) from None
     return _simulation_response(simulation.snapshot())
 
 
@@ -582,18 +611,41 @@ async def simulation_audio(
 
     await websocket.accept()
     queue = simulation.subscribe_audio()
+    frame_count = 0
+    byte_count = 0
+    logger.info(
+        "simulation_audio_ws_connected simulation_id={} user_id={}",
+        simulation_id,
+        user.id,
+    )
     try:
         while True:
             chunk = await queue.get()
             if chunk is None:  # end-of-stream sentinel from finalize
                 break
             await websocket.send_bytes(chunk)
+            frame_count += 1
+            byte_count += len(chunk)
+            if frame_count == 1 or frame_count % 50 == 0:
+                logger.info(
+                    "simulation_audio_frame simulation_id={} sequence={} bytes={} total_bytes={}",
+                    simulation_id,
+                    frame_count,
+                    len(chunk),
+                    byte_count,
+                )
     except WebSocketDisconnect:
         pass
     except Exception as e:
         logger.debug(f"Simulation audio WS error for {simulation_id}: {e}")
     finally:
         simulation.unsubscribe_audio(queue)
+        logger.info(
+            "simulation_audio_ws_closed simulation_id={} frames={} total_bytes={}",
+            simulation_id,
+            frame_count,
+            byte_count,
+        )
         if websocket.application_state == WebSocketState.CONNECTED:
             try:
                 await websocket.close()

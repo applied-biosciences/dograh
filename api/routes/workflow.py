@@ -50,6 +50,7 @@ from api.services.mps_service_key_client import mps_service_key_client
 from api.services.posthog_client import capture_event
 from api.services.reports import generate_workflow_report_csv
 from api.services.storage import storage_fs
+from api.services.storage_audit import audit_run_storage
 from api.services.workflow.configuration_policy import (
     ExternalPBXConfigurationDisabledError,
     WorkflowConfigurationNotFoundError,
@@ -366,7 +367,7 @@ class CreateWorkflowRunRequest(BaseModel):
 
 class CreateWorkflowRunResponse(BaseModel):
     id: int
-    call_id: str
+    call_id: str | None = None
     workflow_id: int
     name: str
     mode: str
@@ -1434,7 +1435,7 @@ async def create_workflow_run(
     )
     return {
         "id": run.id,
-        "call_id": run.call_id,
+        "call_id": getattr(run, "call_id", None),
         "workflow_id": run.workflow_id,
         "name": run.name,
         "mode": run.mode,
@@ -1504,6 +1505,8 @@ async def get_workflow_run(
         "scenario_id": run.scenario_id,
         "scenario_name": run.scenario_name,
         "service_user_id": run.service_user_id,
+        "caller_identifier_id": run.caller_identifier_id,
+        "caller_state": run.caller_state,
         "caller_identifier": run.caller_identifier,
         "telephone_number": run.telephone_number,
         "direction": run.direction,
@@ -1513,6 +1516,7 @@ async def get_workflow_run(
         "duration_seconds": run.duration_seconds,
         "call_status": run.call_status,
         "telephony_provider": run.telephony_provider,
+        "provider_call_id": run.provider_call_id,
         "model_provider": run.model_provider,
         "stt_provider": run.stt_provider,
         "tts_provider": run.tts_provider,
@@ -1522,8 +1526,35 @@ async def get_workflow_run(
         "recording_format": run.recording_format,
         "recording_size_bytes": run.recording_size_bytes,
         "full_transcript": run.full_transcript,
+        "transcript_object_key": run.transcript_object_key,
+        "latency_metrics": run.latency_metrics,
         "termination_reason": run.termination_reason,
     }
+
+
+@router.get(
+    "/{workflow_id}/runs/{run_id}/storage-audit",
+    **sdk_expose(
+        method="audit_workflow_run_storage",
+        description="Verify relational and object-storage artifacts for one run.",
+    ),
+)
+async def audit_workflow_run_storage(
+    workflow_id: int,
+    run_id: int,
+    user: UserModel = Depends(get_user),
+) -> dict:
+    """Return read-only storage verification scoped to the user's org."""
+    run = await db_client.get_workflow_run(
+        run_id,
+        organization_id=user.selected_organization_id,
+    )
+    if run is None or run.workflow_id != workflow_id:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    return await audit_run_storage(
+        run_id,
+        organization_id=user.selected_organization_id,
+    )
 
 
 class WorkflowRunsResponse(BaseModel):

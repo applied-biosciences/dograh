@@ -9,6 +9,7 @@ from loguru import logger
 
 from api.db import db_client
 from api.services.memory.extraction import extract_and_store_memories
+from api.services.sakinah.continuity import persist_continuity_summary
 from api.tasks.function_names import FunctionNames
 
 
@@ -69,3 +70,4 @@ async def persist_workflow_run_call_data(_ctx, workflow_run_id: int) -> None:
 
 async def extract_workflow_run_memories(_ctx, workflow_run_id: int) -> None:
     await extract_and_store_memories(workflow_run_id)
+    await persist_continuity_summary(workflow_run_id, client=db_client)

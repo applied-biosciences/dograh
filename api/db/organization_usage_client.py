@@ -8,17 +8,37 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import joinedload
 
 from api.db.base_client import BaseDBClient
-from api.db.filters import apply_workflow_run_filters
+from api.db.filters import (
+    apply_workflow_run_filters,
+    get_workflow_run_order_clause,
+)
 from api.db.models import (
+    CallScoreModel,
     OrganizationConfigurationModel,
     OrganizationModel,
     OrganizationUsageCycleModel,
-    CallScoreModel,
     WorkflowModel,
     WorkflowRunModel,
 )
 from api.enums import OrganizationConfigurationKey
 from api.utils.recording_artifacts import get_recording_storage_key
+
+# Filters the org-wide usage surfaces accept. Anything else in the request is
+# dropped, so a caller can't reach fields the usage page doesn't expose. The
+# listing and the CSV export share this so they can't drift apart.
+USAGE_ALLOWED_FILTERS = frozenset(
+    {
+        "duration",
+        "dispositionCode",
+        "callerNumber",
+        "calledNumber",
+        "runId",
+        "workflowId",
+        "campaignId",
+        "callDirection",
+        "callChannel",
+    }
+)
 
 
 class OrganizationUsageClient(BaseDBClient):
@@ -131,8 +151,15 @@ class OrganizationUsageClient(BaseDBClient):
         limit: int = 50,
         offset: int = 0,
         filters: Optional[list[dict]] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "desc",
     ) -> tuple[list[dict], int, float, int]:
-        """Get paginated workflow runs with usage for an organization."""
+        """Get paginated workflow runs with usage for an organization.
+
+        Args:
+            sort_by: Field to sort by ('duration', 'created_at'); defaults to created_at
+            sort_order: 'asc' or 'desc'
+        """
         async with self.async_session() as session:
             query = (
                 select(WorkflowRunModel)
@@ -141,7 +168,6 @@ class OrganizationUsageClient(BaseDBClient):
                     WorkflowModel.organization_id == organization_id,
                     WorkflowRunModel.usage_info.isnot(None),
                 )
-                .order_by(WorkflowRunModel.created_at.desc())
             )
 
             # Apply date filters if provided
@@ -152,15 +178,6 @@ class OrganizationUsageClient(BaseDBClient):
 
             # Only allow specific filters for usage history endpoint
             # This ensures security and prevents unexpected filter attributes
-            allowed_filters = {
-                "duration",
-                "dispositionCode",
-                "callerNumber",
-                "calledNumber",
-                "runId",
-                "workflowId",
-                "campaignId",
-            }
             sanitized_filters = []
 
             if filters:
@@ -168,7 +185,7 @@ class OrganizationUsageClient(BaseDBClient):
                     attribute = filter_item.get("attribute")
 
                     # Only process allowed filters
-                    if attribute in allowed_filters:
+                    if attribute in USAGE_ALLOWED_FILTERS:
                         sanitized_filters.append(filter_item)
 
             # Apply filters using the common filter function
@@ -180,8 +197,13 @@ class OrganizationUsageClient(BaseDBClient):
             )
             total_count = count_result.scalar()
 
+            # Tie-break on id so paging stays stable when many runs share the
+            # same duration (or timestamp) — without it, rows can repeat or be
+            # skipped across pages.
+            order_clause = get_workflow_run_order_clause(sort_by, sort_order)
             results = await session.execute(
                 query.options(joinedload(WorkflowRunModel.workflow))
+                .order_by(order_clause, WorkflowRunModel.id.desc())
                 .limit(limit)
                 .offset(offset)
             )
@@ -206,7 +228,9 @@ class OrganizationUsageClient(BaseDBClient):
                 dograh_tokens = 0
                 call_duration = run.duration_seconds
                 if call_duration is None:
-                    call_duration = (run.usage_info or {}).get("call_duration_seconds") or 0
+                    call_duration = (run.usage_info or {}).get(
+                        "call_duration_seconds"
+                    ) or 0
                 call_duration = float(call_duration)
                 total_tokens += dograh_tokens
                 total_duration_seconds += int(round(call_duration))
@@ -259,15 +283,23 @@ class OrganizationUsageClient(BaseDBClient):
                         if run.service_user_id
                         else "Anonymous"
                     ),
+                    "caller_state": run.caller_state,
                     "scenario_id": run.scenario_id,
                     "scenario_name": run.scenario_name,
                     "call_status": run.call_status,
-                    "started_at": run.started_at.isoformat() if run.started_at else None,
-                    "connected_at": run.connected_at.isoformat() if run.connected_at else None,
+                    "started_at": run.started_at.isoformat()
+                    if run.started_at
+                    else None,
+                    "connected_at": run.connected_at.isoformat()
+                    if run.connected_at
+                    else None,
                     "ended_at": run.ended_at.isoformat() if run.ended_at else None,
                     "calm_score": scores.calm_score if scores else None,
                     "safety_score": scores.safety_score if scores else None,
-                    "clinical_evaluation": scores.clinical_evaluation if scores else None,
+                    "clinical_evaluation": scores.clinical_evaluation
+                    if scores
+                    else None,
+                    "latency_metrics": run.latency_metrics,
                 }
 
                 # Add USD cost if available in cost_info
@@ -318,19 +350,10 @@ class OrganizationUsageClient(BaseDBClient):
             if end_date:
                 query = query.where(WorkflowRunModel.created_at <= end_date)
 
-            allowed_filters = {
-                "duration",
-                "dispositionCode",
-                "callerNumber",
-                "calledNumber",
-                "runId",
-                "workflowId",
-                "campaignId",
-            }
             sanitized_filters = []
             if filters:
                 for filter_item in filters:
-                    if filter_item.get("attribute") in allowed_filters:
+                    if filter_item.get("attribute") in USAGE_ALLOWED_FILTERS:
                         sanitized_filters.append(filter_item)
 
             query = apply_workflow_run_filters(query, sanitized_filters)

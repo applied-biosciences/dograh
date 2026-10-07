@@ -8,7 +8,7 @@ import {
   getWorkflowsSummaryApiV1WorkflowSummaryGet,
   updatePhoneNumberApiV1OrganizationsTelephonyConfigsConfigIdPhoneNumbersPhoneNumberIdPut,
 } from "@/client/sdk.gen";
-import type { PhoneNumberResponse } from "@/client/types.gen";
+import type { PhoneNumberResponse, TrunkResponse } from "@/client/types.gen";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -35,11 +35,18 @@ interface PhoneNumberDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   configId: number;
+  provider?: string;
+  /** Carrier paths on this configuration; empty for providers without trunks. */
+  trunks?: TrunkResponse[];
+  /** Preselected trunk when creating — set when the dialog is opened from a
+      trunk rather than from the flat numbers table. */
+  defaultTrunkId?: number | null;
   existing?: PhoneNumberResponse | null;
   onSaved: () => void;
 }
 
 const NO_WORKFLOW = "__none__";
+const NO_TRUNK = "__no_trunk__";
 
 // Mirrors api/schemas/telephony_phone_number.py::_validate_address_shape and
 // api/utils/telephony_address.py — keep in sync. Returns an error message
@@ -65,10 +72,14 @@ export function PhoneNumberDialog({
   open,
   onOpenChange,
   configId,
-  existing,
+  provider,
+  trunks = [],
+  defaultTrunkId = null,
+  existing = null,
   onSaved,
 }: PhoneNumberDialogProps) {
   const { user, getAccessToken } = useAuth();
+  const isWhatsApp = provider === "whatsapp";
   const isEdit = !!existing;
 
   const [address, setAddress] = useState("");
@@ -77,6 +88,7 @@ export function PhoneNumberDialog({
   const [isActive, setIsActive] = useState(true);
   const [isDefaultCallerId, setIsDefaultCallerId] = useState(false);
   const [inboundWorkflowId, setInboundWorkflowId] = useState<string>(NO_WORKFLOW);
+  const [trunkId, setTrunkId] = useState<string>(NO_TRUNK);
   const [workflows, setWorkflows] = useState<{ id: number; name: string }[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [addressTouched, setAddressTouched] = useState(false);
@@ -92,8 +104,12 @@ export function PhoneNumberDialog({
     setInboundWorkflowId(
       existing?.inbound_workflow_id ? String(existing.inbound_workflow_id) : NO_WORKFLOW,
     );
+    const initialTrunkId = existing
+      ? existing.telephony_trunk_id
+      : (defaultTrunkId ?? null);
+    setTrunkId(initialTrunkId ? String(initialTrunkId) : NO_TRUNK);
     setAddressTouched(false);
-  }, [open, existing]);
+  }, [open, existing, defaultTrunkId]);
 
   // Only validate the address on create — edits keep the immutable address.
   const addressError = isEdit ? null : validateAddress(address, countryCode);
@@ -131,6 +147,7 @@ export function PhoneNumberDialog({
       const token = await getAccessToken();
       const inboundId =
         inboundWorkflowId === NO_WORKFLOW ? null : Number(inboundWorkflowId);
+      const selectedTrunkId = trunkId === NO_TRUNK ? null : Number(trunkId);
 
       let providerSync: PhoneNumberResponse["provider_sync"] | undefined;
       if (isEdit && existing) {
@@ -144,6 +161,8 @@ export function PhoneNumberDialog({
               country_code: countryCode || undefined,
               inbound_workflow_id: inboundId ?? undefined,
               clear_inbound_workflow: inboundId === null,
+              telephony_trunk_id: selectedTrunkId ?? undefined,
+              clear_trunk: selectedTrunkId === null,
             },
           },
         );
@@ -160,8 +179,9 @@ export function PhoneNumberDialog({
               country_code: countryCode || undefined,
               label: label || undefined,
               is_active: isActive,
-              is_default_caller_id: isDefaultCallerId,
+              is_default_caller_id: !isWhatsApp && isDefaultCallerId,
               inbound_workflow_id: inboundId ?? undefined,
+              telephony_trunk_id: selectedTrunkId ?? undefined,
             },
           },
         );
@@ -229,11 +249,17 @@ export function PhoneNumberDialog({
               <Label htmlFor="pn-country">Country (ISO-2)</Label>
               <Input
                 id="pn-country"
-                placeholder="US"
+                placeholder={isWhatsApp ? "N/A" : "US"}
                 maxLength={2}
                 value={countryCode}
                 onChange={(e) => setCountryCode(e.target.value.toUpperCase())}
+                disabled={isWhatsApp}
               />
+              {isWhatsApp && (
+                <p className="text-xs text-muted-foreground">
+                  Country is locked for WhatsApp numbers.
+                </p>
+              )}
             </div>
             <div className="space-y-1">
               <Label htmlFor="pn-label">Label</Label>
@@ -249,16 +275,19 @@ export function PhoneNumberDialog({
           <div className="space-y-1">
             <Label htmlFor="pn-workflow">Inbound workflow</Label>
             <Select value={inboundWorkflowId} onValueChange={setInboundWorkflowId}>
-              <SelectTrigger id="pn-workflow">
+              <SelectTrigger id="pn-workflow" className="w-full max-w-full overflow-hidden min-w-0 [&>span]:truncate [&>span]:min-w-0">
                 <SelectValue placeholder="(none)" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={NO_WORKFLOW}>(none)</SelectItem>
-                {workflows.map((w) => (
-                  <SelectItem key={w.id} value={String(w.id)}>
-                    #{w.id} - {w.name}
-                  </SelectItem>
-                ))}
+                {workflows.map((w) => {
+                  const label = `#${w.id} - ${w.name}`;
+                  return (
+                    <SelectItem key={w.id} value={String(w.id)} title={label}>
+                      <span className="truncate max-w-[380px]">{label}</span>
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
@@ -267,12 +296,39 @@ export function PhoneNumberDialog({
             </p>
           </div>
 
+          {trunks.length > 0 && (
+            <div className="space-y-1">
+              <Label htmlFor="pn-trunk">Outbound trunk</Label>
+              <Select value={trunkId} onValueChange={setTrunkId}>
+                <SelectTrigger id="pn-trunk" className="w-full max-w-full overflow-hidden min-w-0 [&>span]:truncate [&>span]:min-w-0">
+                  <SelectValue placeholder="(none)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_TRUNK}>(none)</SelectItem>
+                  {trunks.map((trunk) => (
+                    <SelectItem key={trunk.id} value={String(trunk.id)}>
+                      <span className="truncate max-w-[380px]">
+                        {trunk.name}
+                        {trunk.enabled ? "" : " (disabled)"}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {trunks.length > 1
+                  ? "Calls from this number leave on this trunk. Pick the one whose carrier authorised the number — carriers reject a caller ID they do not own."
+                  : "Calls from this number leave on this trunk. With a single trunk Dograh falls back to it anyway."}
+              </p>
+            </div>
+          )}
+
           <div className="flex items-center justify-between rounded border p-3">
             <Label className="text-sm">Active</Label>
             <Switch checked={isActive} onCheckedChange={setIsActive} />
           </div>
 
-          {!isEdit && (
+          {!isEdit && !isWhatsApp && (
             <div className="flex items-center justify-between rounded border p-3">
               <div>
                 <Label className="text-sm">Default caller ID for this configuration</Label>

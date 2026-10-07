@@ -51,6 +51,7 @@ class WorkflowRunMode(Enum):
     VOBIZ = "vobiz"
     CLOUDONIX = "cloudonix"
     TELNYX = "telnyx"
+    WHATSAPP = "whatsapp"
     WEBRTC = "webrtc"
     SMALLWEBRTC = "smallwebrtc"
     TEXTCHAT = "textchat"
@@ -60,6 +61,45 @@ class WorkflowRunMode(Enum):
     STASIS = "stasis"
     VOICE = "VOICE"
     CHAT = "CHAT"
+
+
+class WorkflowRunChannel(Enum):
+    """How a run reached the agent, coarser than the provider-level mode.
+
+    `WorkflowRunMode` records the specific transport (twilio, telnyx, ...);
+    this groups those into the three channels users think in terms of when
+    filtering their runs.
+    """
+
+    TELEPHONY = "telephony"
+    WEB = "web"
+    CHAT = "chat"
+
+
+# Every WorkflowRunMode belongs to exactly one channel. Historical modes are
+# mapped too, so filtering never silently drops old runs.
+WORKFLOW_RUN_MODES_BY_CHANNEL: dict[str, tuple[str, ...]] = {
+    WorkflowRunChannel.TELEPHONY.value: (
+        WorkflowRunMode.ARI.value,
+        WorkflowRunMode.PLIVO.value,
+        WorkflowRunMode.TWILIO.value,
+        WorkflowRunMode.VONAGE.value,
+        WorkflowRunMode.VOBIZ.value,
+        WorkflowRunMode.CLOUDONIX.value,
+        WorkflowRunMode.TELNYX.value,
+        WorkflowRunMode.WHATSAPP.value,
+        WorkflowRunMode.STASIS.value,
+        WorkflowRunMode.VOICE.value,
+    ),
+    WorkflowRunChannel.WEB.value: (
+        WorkflowRunMode.WEBRTC.value,
+        WorkflowRunMode.SMALLWEBRTC.value,
+    ),
+    WorkflowRunChannel.CHAT.value: (
+        WorkflowRunMode.TEXTCHAT.value,
+        WorkflowRunMode.CHAT.value,
+    ),
+}
 
 
 class StorageBackend(Enum):
@@ -81,13 +121,17 @@ class StorageBackend(Enum):
 
     @classmethod
     def get_current_backend(cls):
-        """Get current backend based on ENABLE_AWS_S3 flag."""
-        from api.constants import ENABLE_AWS_S3
+        """Return the explicitly configured primary artifact backend.
 
-        if ENABLE_AWS_S3:
+        Stage C's ``ENABLE_AWS_S3_SECONDARY`` is intentionally absent here:
+        it copies already-persisted MinIO objects and must not change the
+        synchronous write/read path for a workflow run.
+        """
+        from api.constants import ENABLE_AWS_S3_PRIMARY
+
+        if ENABLE_AWS_S3_PRIMARY:
             return cls.S3
-        else:
-            return cls.MINIO
+        return cls.MINIO
 
 
 class WorkflowRunState(Enum):

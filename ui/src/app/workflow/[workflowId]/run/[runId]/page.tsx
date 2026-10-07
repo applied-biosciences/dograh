@@ -22,11 +22,13 @@ import { toast } from 'sonner';
 
 import WorkflowLayout from '@/app/workflow/WorkflowLayout';
 import {
+    auditWorkflowRunStorageApiV1WorkflowWorkflowIdRunsRunIdStorageAuditGet,
     getWorkflowApiV1WorkflowFetchWorkflowIdGet,
     getWorkflowRunApiV1WorkflowWorkflowIdRunsRunIdGet,
 } from '@/client/sdk.gen';
 import { MediaPreviewButton, MediaPreviewDialog } from '@/components/MediaPreviewDialog';
 import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
+import { type CalmTurn,TurnByTurnCalmPanel } from '@/components/TurnByTurnCalmPanel';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -38,9 +40,35 @@ import { useAuth } from '@/lib/auth';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { formatDateTime } from '@/lib/dateTime';
 import { downloadFile, getSignedUrl } from '@/lib/files';
+import { s3StatusLabel } from '@/lib/storageStatus';
 import { cn } from '@/lib/utils';
 
+type StorageStatus = 'verified' | 'missing' | 'pending' | 'failed' | 'not_expected' | 'not_configured' | 'unknown';
+
+interface StorageAudit {
+    postgres?: {
+        status?: StorageStatus;
+        transcript_status?: StorageStatus;
+        calm_scoring_status?: StorageStatus;
+        recording_metadata_count?: number;
+    };
+    minio?: {
+        status?: StorageStatus;
+        configured?: boolean;
+        objects_found?: number;
+        objects?: Array<{
+            type?: string;
+            key?: string;
+            status?: StorageStatus;
+            size_bytes?: number;
+            checksum_sha256?: string | null;
+        }>;
+    };
+    aws?: { status?: StorageStatus };
+}
+
 interface WorkflowRunResponse {
+    call_id: string | null;
     mode: string;
     created_at: string | null;
     is_completed: boolean;
@@ -56,6 +84,13 @@ interface WorkflowRunResponse {
     gathered_context: Record<string, string | number | boolean | object> | null;
     logs: WorkflowRunLogs | null;
     annotations: Record<string, unknown> | null;
+}
+
+function calmTurns(annotations: Record<string, unknown> | null): CalmTurn[] {
+    const scoring = annotations?.calm_scoring as Record<string, unknown> | undefined;
+    const caller = Array.isArray(scoring?.caller) ? scoring.caller.map((turn) => ({ ...(turn as CalmTurn), role: 'caller' })) : [];
+    const sakinah = Array.isArray(scoring?.sakinah) ? scoring.sakinah.map((turn) => ({ ...(turn as CalmTurn), role: 'sakinah' })) : [];
+    return [...caller, ...sakinah];
 }
 
 const RUN_SHELL_HEIGHT_CLASS = "h-[calc(100svh-49px)] min-h-[calc(100svh-49px)] max-h-[calc(100svh-49px)]";
@@ -93,6 +128,62 @@ function MetricCard({ label, value }: { label: string; value: string }) {
             <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">{label}</p>
             <p className="mt-2 text-lg font-semibold text-foreground">{value}</p>
         </div>
+    );
+}
+
+function StorageAuditSection({ audit }: { audit: StorageAudit }) {
+    const statusLabel = (status?: StorageStatus) => status?.replaceAll('_', ' ') ?? 'unknown';
+    const statusIcon = (status?: StorageStatus) => status === 'verified' ? '✓' : status === 'not_configured' || status === 'not_expected' ? '–' : '!';
+    const objectCount = audit.minio?.objects_found ?? 0;
+
+    return (
+        <Card className="border-border">
+            <CardHeader>
+                <CardTitle className="text-lg">Storage</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+                <div className="grid gap-2 sm:grid-cols-4">
+                    <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+                        <p className="text-muted-foreground">Database</p>
+                        <p className="font-medium">Local Postgres {statusIcon(audit.postgres?.status)} <span className="text-muted-foreground">({statusLabel(audit.postgres?.status)})</span></p>
+                    </div>
+                    <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+                        <p className="text-muted-foreground">Transcript</p>
+                        <p className="font-medium">Postgres {statusIcon(audit.postgres?.transcript_status)} <span className="text-muted-foreground">({statusLabel(audit.postgres?.transcript_status)})</span></p>
+                    </div>
+                    <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+                        <p className="text-muted-foreground">AWS S3</p>
+                        <p className="font-medium">{s3StatusLabel(audit.aws?.status)}</p>
+                    </div>
+                    <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+                        <p className="text-muted-foreground">CALM scoring</p>
+                        <p className="font-medium">Postgres/MinIO {statusIcon(audit.postgres?.calm_scoring_status)} <span className="text-muted-foreground">({statusLabel(audit.postgres?.calm_scoring_status)})</span></p>
+                    </div>
+                </div>
+                <div className="flex flex-wrap gap-x-5 gap-y-1 text-muted-foreground">
+                    <span>Local MinIO: {statusLabel(audit.minio?.status)}</span>
+                    <span>Audio objects: {objectCount}</span>
+                    <span>Recording metadata: {audit.postgres?.recording_metadata_count ?? 0}</span>
+                </div>
+                {audit.minio?.objects && audit.minio.objects.length > 0 && (
+                    <div className="space-y-1 border-t border-border pt-3">
+                        {audit.minio.objects.map((object) => (
+                            <div key={`${object.type}-${object.key}`} className="flex flex-wrap items-center gap-2 text-xs">
+                                <span className="font-medium">{object.type ?? 'object'}</span>
+                                <span className="min-w-0 truncate font-mono text-muted-foreground">{object.key}</span>
+                                <span>{object.size_bytes ?? 0} bytes</span>
+                                <span>{statusIcon(object.status)} {statusLabel(object.status)}</span>
+                                {object.checksum_sha256 && (
+                                    <span className="font-mono text-muted-foreground" title={object.checksum_sha256}>
+                                        sha256:{object.checksum_sha256.slice(0, 12)}…
+                                    </span>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </CardContent>
+        </Card>
     );
 }
 
@@ -615,6 +706,9 @@ export default function WorkflowRunPage() {
     const auth = useAuth();
     const organizationTimezone = useOrganizationTimezone();
     const [workflowRun, setWorkflowRun] = useState<WorkflowRunResponse | null>(null);
+    const hasWorkflowRun = workflowRun !== null;
+    const isRunCompleted = workflowRun?.is_completed ?? false;
+    const [storageAudit, setStorageAudit] = useState<StorageAudit | null>(null);
     const [workflowName, setWorkflowName] = useState<string | null>(null);
     const customizeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -637,7 +731,7 @@ export default function WorkflowRunPage() {
             const runId = Number(params.runId);
 
             try {
-                const [runResponse, workflowResponse] = await Promise.all([
+                const [runResponse, workflowResponse, auditResponse] = await Promise.all([
                     getWorkflowRunApiV1WorkflowWorkflowIdRunsRunIdGet({
                         path: {
                             workflow_id: workflowId,
@@ -649,10 +743,19 @@ export default function WorkflowRunPage() {
                             workflow_id: workflowId,
                         },
                     }),
+                    auditWorkflowRunStorageApiV1WorkflowWorkflowIdRunsRunIdStorageAuditGet({
+                        path: {
+                            workflow_id: workflowId,
+                            run_id: runId,
+                        },
+                    }),
                 ]);
+
+                setStorageAudit((auditResponse.data as StorageAudit | undefined) ?? null);
 
                 setWorkflowName(workflowResponse.data?.name ?? null);
                 const runData = {
+                    call_id: runResponse.data?.call_id ?? null,
                     mode: runResponse.data?.mode ?? '',
                     created_at: runResponse.data?.created_at ?? null,
                     is_completed: runResponse.data?.is_completed ?? false,
@@ -681,11 +784,30 @@ export default function WorkflowRunPage() {
             }
         };
         fetchWorkflowRun();
-    }, [params.workflowId, params.runId, auth]);
+    }, [params.workflowId, params.runId, auth.isAuthenticated, auth.loading]);
+
+    useEffect(() => {
+        if (!auth.isAuthenticated || !hasWorkflowRun || isRunCompleted) return;
+        const timer = window.setInterval(async () => {
+            const response = await getWorkflowRunApiV1WorkflowWorkflowIdRunsRunIdGet({
+                path: { workflow_id: Number(params.workflowId), run_id: Number(params.runId) },
+            });
+            if (!response.data) return;
+            setWorkflowRun((current) => current ? {
+                ...current,
+                is_completed: response.data?.is_completed ?? current.is_completed,
+                annotations: response.data?.annotations as Record<string, unknown> | null ?? null,
+                logs: response.data?.logs as WorkflowRunLogs | null ?? current.logs,
+                transcript_url: response.data?.transcript_url ?? current.transcript_url,
+                recording_url: response.data?.recording_url ?? current.recording_url,
+            } : current);
+        }, 3000);
+        return () => window.clearInterval(timer);
+    }, [auth.isAuthenticated, params.workflowId, params.runId, hasWorkflowRun, isRunCompleted]);
 
     let returnValue = null;
     const isTextChatRun = workflowRun?.mode === WORKFLOW_RUN_MODES.TEXTCHAT;
-    const showRunDetailsView = Boolean(workflowRun?.is_completed || isTextChatRun);
+    const showRunDetailsView = Boolean(workflowRun);
     const userSplitRecordingUrl = workflowRun?.user_recording_url ?? null;
     const botSplitRecordingUrl = workflowRun?.bot_recording_url ?? null;
     const hasSplitTracks = Boolean(userSplitRecordingUrl && botSplitRecordingUrl);
@@ -718,7 +840,7 @@ export default function WorkflowRunPage() {
         returnValue = (
             <div className={`flex ${RUN_SHELL_HEIGHT_CLASS} min-h-0 w-full overflow-hidden bg-background`}>
                 <div className="min-w-0 flex-1 overflow-y-auto">
-                    <div className="mx-auto w-full max-w-4xl space-y-6 p-6">
+                    <div className="mx-auto w-full max-w-6xl space-y-6 p-6">
                     <Card className="border-border">
                         <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                             <div className="min-w-0 flex-1 space-y-2">
@@ -743,7 +865,7 @@ export default function WorkflowRunPage() {
                                 </div>
                                 <div className="flex min-w-0 items-center gap-4 pt-1">
                                     <CardTitle className="min-w-0 text-2xl">
-                                        {isTextChatRun ? 'Text Chat Session' : 'Agent Run Completed'}
+                                        {isTextChatRun ? 'Text Chat Session' : workflowRun?.is_completed ? 'Agent Run Completed' : 'Agent Run In Progress'}
                                     </CardTitle>
                                     <div className={`h-8 w-8 rounded-full flex items-center justify-center ${isTextChatRun ? 'bg-sky-500/15' : 'bg-emerald-500/20'}`}>
                                         {isTextChatRun ? (
@@ -780,7 +902,9 @@ export default function WorkflowRunPage() {
                             <p className="text-muted-foreground mb-8">
                                 {isTextChatRun
                                     ? 'Review the conversation history, metrics, and context captured for this text session.'
-                                    : 'Your voice agent run has been completed successfully. You can preview or download the transcript and recording.'}
+                                    : workflowRun?.is_completed
+                                        ? 'Your voice agent run has been completed successfully. You can preview or download the transcript and recording.'
+                                        : 'Turn-by-turn CALM scoring refreshes here during the call.'}
                             </p>
 
                             <div className="flex flex-wrap gap-4">
@@ -792,6 +916,7 @@ export default function WorkflowRunPage() {
                                                 recordingUrl={workflowRun?.recording_url}
                                                 transcriptUrl={workflowRun?.transcript_url}
                                                 runId={Number(params.runId)}
+                                                callId={workflowRun?.call_id}
                                                 onOpenPreview={openPreview}
                                             />
                                         </div>
@@ -848,6 +973,8 @@ export default function WorkflowRunPage() {
                             gatheredContext={workflowRun?.gathered_context ?? null}
                         />
 
+                        {storageAudit && <StorageAuditSection audit={storageAudit} />}
+
                         {!isTextChatRun && hasSplitTracks && (
                             <SplitTracksSection
                                 userRecordingUrl={userSplitRecordingUrl as string}
@@ -872,6 +999,8 @@ export default function WorkflowRunPage() {
                                 context={workflowRun.annotations as Record<string, string | number | boolean | object>}
                             />
                         )}
+
+                        <TurnByTurnCalmPanel turns={calmTurns(workflowRun?.annotations ?? null)} />
                     </div>
                 </div>
 

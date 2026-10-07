@@ -1,0 +1,38 @@
+# An intentionally separate service. It does not amend Dograh production Compose.
+services:
+  data-explorer:
+    build:
+      context: ./apps/data-explorer
+    ports:
+      # Never publish the unauthenticated local-test mode beyond this machine.
+      - "127.0.0.1:8090:8090"
+    environment:
+      DATA_EXPLORER_DATABASE_READONLY_URL: ${DATA_EXPLORER_DATABASE_READONLY_URL:?Set a PostgreSQL SELECT-only connection URL}
+      DATA_EXPLORER_ADMIN_TOKEN: ${DATA_EXPLORER_ADMIN_TOKEN:-}
+      DATA_EXPLORER_LOCAL_TEST_MODE: ${DATA_EXPLORER_LOCAL_TEST_MODE:-false}
+      DATA_EXPLORER_AUDIT_LOG_PATH: /var/log/calmos-data-explorer/audit.jsonl
+      DATA_EXPLORER_S3_BUCKET: ${DATA_EXPLORER_S3_BUCKET:-}
+      DATA_EXPLORER_S3_PREFIX: ${DATA_EXPLORER_S3_PREFIX:-}
+      AWS_RECORDINGS_BUCKET: ${AWS_RECORDINGS_BUCKET:-}
+      AWS_REGION: ${AWS_REGION:-eu-west-2}
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      MINIO_BUCKET: ${MINIO_BUCKET:-}
+      MINIO_ENDPOINT: http://minio:9000
+      DATA_EXPLORER_MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-}
+      DATA_EXPLORER_MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-}
+    volumes:
+      - data-explorer-audit:/var/log/calmos-data-explorer
+      # Local development AWS profile/SSO credentials only; do not add static
+      # AWS keys to an .env file.
+      - ${HOME}/.aws:/home/explorer/.aws:ro
+    networks:
+      - app-network
+volumes:
+  data-explorer-audit:
+networks:
+  # The local Dograh stack already owns this network. The explorer joins it
+  # rather than publishing PostgreSQL or MinIO outside the stack.
+  app-network:
+    external: true
+    name: ${DATA_EXPLORER_DOGRAH_NETWORK:-dograh_app-network}

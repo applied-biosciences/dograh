@@ -239,12 +239,44 @@ class ServiceUserModel(Base):
     organization_id = Column(
         Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
     )
-    caller_identifier_hash = Column(String(128), nullable=False)
+    # Legacy SHA-256 lookup retained for rows created before v1.46.0.3. New
+    # identifiers are held in caller_identifiers using a keyed HMAC.
+    caller_identifier_hash = Column(String(128), nullable=True)
     preferred_name = Column(String(200), nullable=True)
     first_seen_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     last_seen_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        server_default=text("now()"),
+    )
+    memory_enabled = Column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    status = Column(
+        String(32), nullable=False, default="active", server_default=text("'active'")
+    )
     first_use_explanation_shown = Column(
         Boolean, nullable=False, default=False, server_default=text("false")
+    )
+
+    caller_identifiers = relationship(
+        "CallerIdentifierModel",
+        back_populates="service_user",
+        cascade="all, delete-orphan",
+    )
+    credentials = relationship(
+        "ServiceUserCredentialModel",
+        back_populates="service_user",
+        cascade="all, delete-orphan",
     )
 
     __table_args__ = (
@@ -253,7 +285,121 @@ class ServiceUserModel(Base):
             "caller_identifier_hash",
             name="uq_service_users_org_caller_hash",
         ),
-        Index("ix_service_users_org_caller_hash", "organization_id", "caller_identifier_hash"),
+        Index(
+            "ix_service_users_org_caller_hash",
+            "organization_id",
+            "caller_identifier_hash",
+        ),
+        Index("ix_service_users_org_status", "organization_id", "status"),
+    )
+
+
+class CallerIdentifierModel(Base):
+    """Protected, organization-scoped lookup identifier for a service user."""
+
+    __tablename__ = "caller_identifiers"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    service_user_id = Column(
+        String(36), ForeignKey("service_users.id", ondelete="CASCADE"), nullable=False
+    )
+    identifier_type = Column(String(32), nullable=False, default="phone")
+    identifier_value_hash = Column(String(128), nullable=False)
+    hash_scheme = Column(
+        String(32),
+        nullable=False,
+        default="hmac_sha256_v1",
+        server_default=text("'hmac_sha256_v1'"),
+    )
+    verified = Column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    verification_level = Column(
+        String(32), nullable=False, default="none", server_default=text("'none'")
+    )
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
+    )
+    last_seen_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
+    )
+
+    service_user = relationship("ServiceUserModel", back_populates="caller_identifiers")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "identifier_type",
+            "identifier_value_hash",
+            name="uq_caller_identifiers_org_type_hash",
+        ),
+        Index(
+            "ix_caller_identifiers_lookup",
+            "organization_id",
+            "identifier_type",
+            "identifier_value_hash",
+        ),
+        Index("ix_caller_identifiers_service_user_id", "service_user_id"),
+        Index("ix_caller_identifiers_last_seen_at", "last_seen_at"),
+    )
+
+
+class ServiceUserCredentialModel(Base):
+    """Server-side credentials for organization-scoped service users.
+
+    PIN material is deliberately kept out of workflow runs, memory rows and
+    context JSON. ``pin_hash`` is a bcrypt digest; ``pin_salt`` is retained as
+    metadata for audit/algorithm migration and is never a plaintext PIN.
+    """
+
+    __tablename__ = "service_user_credentials"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    service_user_id = Column(
+        String(36), ForeignKey("service_users.id", ondelete="CASCADE"), nullable=False
+    )
+    credential_type = Column(String(32), nullable=False, default="sakinah_pin")
+    pin_hash = Column(String(255), nullable=False)
+    pin_salt = Column(String(64), nullable=True)
+    hash_algorithm = Column(
+        String(32), nullable=False, default="bcrypt_v1", server_default=text("'bcrypt_v1'")
+    )
+    status = Column(String(32), nullable=False, default="active", server_default=text("'active'"))
+    failed_attempt_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    locked_until = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+    last_verified_at = Column(DateTime(timezone=True), nullable=True)
+
+    organization = relationship("OrganizationModel")
+    service_user = relationship("ServiceUserModel", back_populates="credentials")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "service_user_id",
+            "credential_type",
+            name="uq_service_user_credentials_org_user_type",
+        ),
+        Index(
+            "ix_service_user_credentials_lookup",
+            "organization_id",
+            "service_user_id",
+            "credential_type",
+        ),
+        Index("ix_service_user_credentials_status", "status", "locked_until"),
     )
 
 
@@ -292,6 +438,11 @@ class TelephonyConfigurationModel(Base):
         back_populates="configuration",
         cascade="all, delete-orphan",
     )
+    trunks = relationship(
+        "TelephonyTrunkModel",
+        back_populates="configuration",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         UniqueConstraint(
@@ -307,6 +458,66 @@ class TelephonyConfigurationModel(Base):
     )
 
 
+class TelephonyTrunkModel(Base):
+    """One carrier path on a telephony configuration.
+
+    A configuration holds the credentials for a provider account; a trunk is a
+    single route through that account — a primary carrier, a failover, a second
+    region.
+
+    Only providers whose Dograh integration declares ``trunk_settings_cls`` get
+    rows here. That is a statement about our integration, not about the vendor:
+    Twilio, Plivo and Telnyx all sell SIP trunking and let you assign numbers to
+    a trunk in their own consoles, but Dograh drives them through their
+    call-control APIs, where the account itself is the only route. Their numbers
+    carry a null trunk.
+
+    Phone numbers point at the trunk they are authorised on because a carrier
+    rejects, or declines to attest, a caller ID it does not own. Picking the
+    caller ID and the trunk from separate pools is the failure this table
+    exists to prevent.
+
+    Trunks are reached through their configuration, so there is no
+    ``organization_id`` here to drift out of sync with the parent row.
+    """
+
+    __tablename__ = "telephony_trunks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    telephony_configuration_id = Column(
+        Integer,
+        ForeignKey("telephony_configurations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name = Column(String(64), nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    # Provider-specific payload, validated by the provider's trunk settings
+    # schema: region and sip_domain for Cloudonix, endpoint details for ARI.
+    settings = Column(JSON, nullable=False, default=dict)
+    # The provider's own identifier for this trunk, recorded when Dograh
+    # provisions it remotely. Kept out of ``settings`` because it is Dograh's
+    # bookkeeping rather than operator input, and is stripped from responses.
+    external_id = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    configuration = relationship("TelephonyConfigurationModel", back_populates="trunks")
+    phone_numbers = relationship("TelephonyPhoneNumberModel", back_populates="trunk")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "telephony_configuration_id",
+            "name",
+            name="uq_telephony_trunks_config_name",
+        ),
+        Index("ix_telephony_trunks_config", "telephony_configuration_id"),
+    )
+
+
 class TelephonyPhoneNumberModel(Base):
     __tablename__ = "telephony_phone_numbers"
 
@@ -318,6 +529,19 @@ class TelephonyPhoneNumberModel(Base):
         Integer,
         ForeignKey("telephony_configurations.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    # The carrier path this number dials out over. Null on providers with no
+    # trunk concept, and on SIP numbers whose trunk has not been chosen yet.
+    #
+    # SET NULL rather than RESTRICT: deleting a configuration cascades to both
+    # its trunks and its numbers, and a RESTRICT here could fire against rows
+    # that same cascade is about to remove. Deleting a trunk that numbers still
+    # use is refused in the route layer instead, where the message can name
+    # them.
+    telephony_trunk_id = Column(
+        Integer,
+        ForeignKey("telephony_trunks.id", ondelete="SET NULL"),
+        nullable=True,
     )
     address = Column(String(255), nullable=False)
     address_normalized = Column(String(255), nullable=False)
@@ -348,6 +572,7 @@ class TelephonyPhoneNumberModel(Base):
     configuration = relationship(
         "TelephonyConfigurationModel", back_populates="phone_numbers"
     )
+    trunk = relationship("TelephonyTrunkModel", back_populates="phone_numbers")
     inbound_workflow = relationship("WorkflowModel")
 
     __table_args__ = (
@@ -593,7 +818,19 @@ class WorkflowRunModel(Base):
     scenario_id = Column(String(128), nullable=True, index=True)
     scenario_name = Column(String, nullable=True)
     service_user_id = Column(
-        String(36), ForeignKey("service_users.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36),
+        ForeignKey("service_users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    caller_identifier_id = Column(
+        String(36),
+        ForeignKey("caller_identifiers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    caller_state = Column(
+        String(32), nullable=False, default="UNKNOWN", server_default=text("'UNKNOWN'")
     )
     caller_identifier = Column(String(255), nullable=True)
     telephone_number = Column(String(255), nullable=True)
@@ -604,6 +841,7 @@ class WorkflowRunModel(Base):
     duration_seconds = Column(Float, nullable=True)
     call_status = Column(String(64), nullable=True, index=True)
     telephony_provider = Column(String(64), nullable=True)
+    provider_call_id = Column(String(128), nullable=True)
     model_provider = Column(String(128), nullable=True)
     stt_provider = Column(String(128), nullable=True)
     tts_provider = Column(String(128), nullable=True)
@@ -622,6 +860,10 @@ class WorkflowRunModel(Base):
     recording_format = Column(String(32), nullable=True)
     recording_size_bytes = Column(Integer, nullable=True)
     full_transcript = Column(Text, nullable=True)
+    transcript_object_key = Column(String, nullable=True)
+    latency_metrics = Column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'::json")
+    )
     termination_reason = Column(String(255), nullable=True)
     debug_metadata = Column(
         JSON, nullable=False, default=dict, server_default=text("'{}'::json")
@@ -671,8 +913,17 @@ class WorkflowRunModel(Base):
         ),
         Index("idx_workflow_runs_workflow_id", "workflow_id"),
         Index("idx_workflow_runs_campaign_id", "campaign_id"),
-        Index("idx_workflow_runs_service_user_started_at", "service_user_id", "started_at"),
+        Index(
+            "idx_workflow_runs_service_user_started_at", "service_user_id", "started_at"
+        ),
         Index("idx_workflow_runs_direction_status", "direction", "call_status"),
+        Index("ix_workflow_runs_caller_state", "caller_state"),
+        Index("ix_workflow_runs_created_at", "created_at"),
+        Index(
+            "ix_workflow_runs_provider_call_id",
+            "provider_call_id",
+            postgresql_where=text("provider_call_id IS NOT NULL"),
+        ),
     )
 
 
@@ -687,7 +938,9 @@ class SakinahScenarioModel(Base):
     )
     sequence = Column(Integer, nullable=False)
     title = Column(String, nullable=False)
-    category = Column(String(128), nullable=False, default="", server_default=text("''"))
+    category = Column(
+        String(128), nullable=False, default="", server_default=text("''")
+    )
     tags = Column(JSON, nullable=False, default=list, server_default=text("'[]'::json"))
     mode = Column(String(32), nullable=False)
     persona = Column(Text, nullable=False, default="")
@@ -779,7 +1032,9 @@ class CallUtteranceModel(Base):
     clinical_score = Column(Float, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("agent_run_id", "sequence_number", name="uq_utterances_run_sequence"),
+        UniqueConstraint(
+            "agent_run_id", "sequence_number", name="uq_utterances_run_sequence"
+        ),
         Index("ix_utterances_agent_run_id", "agent_run_id"),
     )
 
@@ -798,12 +1053,62 @@ class CallRecordingModel(Base):
     duration_seconds = Column(Float, nullable=True)
     format = Column(String(32), nullable=False, default="wav")
     size_bytes = Column(Integer, nullable=True)
+    checksum_sha256 = Column(String(64), nullable=True)
     track = Column(String(32), nullable=False, default="mixed")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     __table_args__ = (
         UniqueConstraint("agent_run_id", "track", name="uq_recordings_run_track"),
         Index("ix_recordings_agent_run_id", "agent_run_id"),
+        Index("ix_recordings_object_key", "object_key"),
+        Index("ix_recordings_created_at", "created_at"),
+    )
+
+
+class ArtifactReplicationStatusModel(Base):
+    """Durable status of one primary artifact's secondary S3 copy.
+
+    ``primary_saved`` means the MinIO instance belonging to this deployment
+    saved the object.  It never refers to a different environment's MinIO.
+    """
+
+    __tablename__ = "artifact_replication_status"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    run_id = Column(
+        Integer, ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    artifact_type = Column(String(32), nullable=False)
+    primary_saved = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    s3_saved = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    primary_backend = Column(String(32), nullable=False)
+    primary_bucket = Column(String(255), nullable=True)
+    primary_object_key = Column(String, nullable=False)
+    s3_bucket = Column(String(255), nullable=True)
+    s3_object_key = Column(String, nullable=True)
+    checksum_sha256 = Column(String(64), nullable=True)
+    size_bytes = Column(Integer, nullable=True)
+    s3_uploaded_at = Column(DateTime(timezone=True), nullable=True)
+    retry_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    last_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    last_error_class = Column(String(128), nullable=True)
+    replication_status = Column(
+        String(32), nullable=False, default="pending", server_default=text("'pending'")
+    )
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "artifact_type", "primary_object_key",
+            name="uq_artifact_replication_run_type_primary_key",
+        ),
+        Index("ix_artifact_replication_pending", "replication_status", "s3_saved"),
+        Index("ix_artifact_replication_run_id", "run_id"),
     )
 
 
@@ -814,10 +1119,17 @@ class CallScoreModel(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     agent_run_id = Column(
-        Integer, ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False, unique=True
+        Integer,
+        ForeignKey("workflow_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
     )
-    calm_score = Column(JSON, nullable=False, default=dict, server_default=text("'{}'::json"))
-    safety_score = Column(JSON, nullable=False, default=dict, server_default=text("'{}'::json"))
+    calm_score = Column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'::json")
+    )
+    safety_score = Column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'::json")
+    )
     clinical_evaluation = Column(
         JSON, nullable=False, default=dict, server_default=text("'{}'::json")
     )
@@ -838,7 +1150,9 @@ class CallEventModel(Base):
     event_type = Column(String(64), nullable=False)
     occurred_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     severity = Column(String(32), nullable=True)
-    payload = Column(JSON, nullable=False, default=dict, server_default=text("'{}'::json"))
+    payload = Column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'::json")
+    )
 
     __table_args__ = (
         Index("ix_call_events_agent_run_id", "agent_run_id"),
@@ -856,18 +1170,36 @@ class MemoryModel(Base):
         String(36), ForeignKey("service_users.id", ondelete="CASCADE"), nullable=False
     )
     memory_type = Column(String(64), nullable=False)
+    fact_key = Column(String(128), nullable=True)
+    fact_category = Column(String(64), nullable=True)
     memory_text = Column(Text, nullable=False)
     embedding = Column(Vector(1536), nullable=True)
     importance = Column(Float, nullable=False, default=0.5)
     confidence = Column(Float, nullable=False, default=0.5)
     sensitivity = Column(String(32), nullable=False, default="normal")
-    source_agent_run_id = Column(Integer, ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True)
-    source_utterance_id = Column(String(36), ForeignKey("utterances.id", ondelete="SET NULL"), nullable=True)
-    internal_context_allowed = Column(Boolean, nullable=False, default=True, server_default=text("true"))
-    verbal_reference_allowed = Column(Boolean, nullable=False, default=False, server_default=text("false"))
-    explicit_detail_allowed = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    source_agent_run_id = Column(
+        Integer, ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    source_utterance_id = Column(
+        String(36), ForeignKey("utterances.id", ondelete="SET NULL"), nullable=True
+    )
+    internal_context_allowed = Column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    verbal_reference_allowed = Column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    explicit_detail_allowed = Column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     last_confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    first_observed_at = Column(DateTime(timezone=True), nullable=True)
+    source_count = Column(Integer, nullable=False, default=1, server_default=text("1"))
+    status = Column(String(32), nullable=False, default="active", server_default=text("'active'"))
+    superseded_by = Column(
+        String(36), ForeignKey("memories.id", ondelete="SET NULL"), nullable=True
+    )
     expires_at = Column(DateTime(timezone=True), nullable=True)
     active = Column(Boolean, nullable=False, default=True, server_default=text("true"))
 
@@ -876,7 +1208,16 @@ class MemoryModel(Base):
         Index("ix_memories_source_agent_run_id", "source_agent_run_id"),
         Index("ix_memories_source_utterance_id", "source_utterance_id"),
         Index("ix_memories_type_active", "memory_type", "active"),
+        Index("ix_memories_service_user_fact_key", "service_user_id", "fact_key"),
+        Index("ix_memories_status", "status"),
         Index("ix_memories_active", "active", postgresql_where=text("active = true")),
+        Index(
+            "ix_memories_service_user_active_expiry",
+            "service_user_id",
+            "active",
+            "expires_at",
+            postgresql_where=text("active = true"),
+        ),
         Index(
             "ix_memories_embedding_ivfflat",
             "embedding",
@@ -898,13 +1239,109 @@ class MemorySourceModel(Base):
     agent_run_id = Column(
         Integer, ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False
     )
-    utterance_id = Column(String(36), ForeignKey("utterances.id", ondelete="SET NULL"), nullable=True)
+    utterance_id = Column(
+        String(36), ForeignKey("utterances.id", ondelete="SET NULL"), nullable=True
+    )
     source_excerpt = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     __table_args__ = (
         Index("ix_memory_sources_memory_id", "memory_id"),
         Index("ix_memory_sources_agent_run_id", "agent_run_id"),
+    )
+
+
+class PrivacyPermissionModel(Base):
+    """Append-only service-user privacy decision with call provenance."""
+
+    __tablename__ = "privacy_permissions"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    service_user_id = Column(
+        String(36), ForeignKey("service_users.id", ondelete="CASCADE"), nullable=False
+    )
+    permission_type = Column(String(64), nullable=False)
+    granted = Column(Boolean, nullable=False)
+    verification_level = Column(
+        String(32), nullable=False, default="none", server_default=text("'none'")
+    )
+    source_workflow_run_id = Column(
+        Integer, ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    permission_metadata = Column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'::json")
+    )
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        server_default=text("now()"),
+    )
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_privacy_permissions_service_user_id", "service_user_id"),
+        Index(
+            "ix_privacy_permissions_source_workflow_run_id",
+            "source_workflow_run_id",
+        ),
+        Index(
+            "ix_privacy_permissions_lookup",
+            "service_user_id",
+            "permission_type",
+            "created_at",
+        ),
+    )
+
+
+class AuditEventModel(Base):
+    """Privacy-safe operational audit event; payloads must never contain PHI."""
+
+    __tablename__ = "audit_events"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    workflow_run_id = Column(
+        Integer, ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    service_user_id = Column(
+        String(36), ForeignKey("service_users.id", ondelete="SET NULL"), nullable=True
+    )
+    actor_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    event_type = Column(String(64), nullable=False)
+    resource_type = Column(String(64), nullable=False)
+    resource_id = Column(String(128), nullable=True)
+    outcome = Column(String(32), nullable=False)
+    event_metadata = Column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'::json")
+    )
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
+    )
+
+    __table_args__ = (
+        Index("ix_audit_events_org_created_at", "organization_id", "created_at"),
+        Index("ix_audit_events_workflow_run_id", "workflow_run_id"),
+        Index("ix_audit_events_service_user_id", "service_user_id"),
+        Index("ix_audit_events_type_created_at", "event_type", "created_at"),
     )
 
 

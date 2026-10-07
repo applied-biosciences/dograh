@@ -109,6 +109,7 @@
             "pages": [
               "integrations/telephony/overview",
               "integrations/telephony/inbound",
+              "integrations/telephony/dograh-sip",
               "integrations/telephony/twilio",
               "integrations/telephony/vonage",
               "integrations/telephony/plivo",
@@ -149,8 +150,10 @@
             "group": "Guides",
             "pages": [
               "developer/workflow-schema",
+              "developer/call-dispositions",
               "developer/webhooks",
-              "developer/environment-variables"
+              "developer/environment-variables",
+              "developer/calmos-connect-v1.46.0.3"
             ]
           },
           {

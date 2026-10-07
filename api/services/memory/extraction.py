@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from loguru import logger
 from pipecat.processors.aggregators.llm_context import LLMContext
 
-from api.constants import MEMORY_EMBEDDING_MODEL, MEMORY_ENABLED
+from api.constants import (
+    MEMORY_EMBEDDING_MODEL,
+    MEMORY_ENABLED,
+    memory_workflow_allowed,
+)
 from api.db import db_client
 from api.services.configuration.ai_model_configuration import (
     apply_managed_embeddings_base_url,
@@ -34,6 +39,29 @@ MEMORY_TYPES = {
 }
 SENSITIVITIES = {"low", "normal", "high", "restricted"}
 
+MEMORY_OPT_OUT_PATTERNS = (
+    re.compile(
+        r"(?im)^\s*(?:\[[^\]\n]{0,200}\]\s*)?"
+        r"(?:user|service user):\s*(?:please\s+)?"
+        r"(?:do not|don't|never)\s+(?:remember|save|store|retain|keep)\b"
+    ),
+    re.compile(
+        r"(?i)\bi\s+(?:do not|don't)\s+want\s+"
+        r"(?:you|sakinah|this service)\s+to\s+"
+        r"(?:remember|save|store|retain|keep)\b"
+    ),
+    re.compile(
+        r"(?i)\bi\s+(?:do not|don't)\s+want\s+"
+        r"(?:this|that|anything|what i (?:said|say))\s+"
+        r"(?:remembered|saved|stored|retained|kept)\b"
+    ),
+    re.compile(
+        r"(?im)^\s*(?:\[[^\]\n]{0,200}\]\s*)?"
+        r"(?:user|service user):\s*(?:please\s+)?forget\s+"
+        r"(?:this|that|everything|what i (?:said|say))\b"
+    ),
+)
+
 
 def _transcript_for_prompt(utterances: list[Any], transcript: str | None) -> str:
     if transcript:
@@ -48,7 +76,7 @@ def _parse_proposals(raw: str | None) -> list[dict[str, Any]]:
         return []
     try:
         parsed = parse_llm_json(raw)
-    except Exception:
+    except Exception:  # noqa: BLE001 - tolerate provider-specific JSON wrappers
         try:
             parsed = json.loads(raw)
         except (TypeError, ValueError):
@@ -58,12 +86,50 @@ def _parse_proposals(raw: str | None) -> list[dict[str, Any]]:
     return parsed if isinstance(parsed, list) else []
 
 
+def _memory_storage_allowed(raw: str | None) -> bool | None:
+    """Return only an explicit model-classified opt-out/permission value."""
+    if not raw:
+        return None
+    try:
+        parsed = parse_llm_json(raw)
+    except Exception:  # noqa: BLE001 - tolerate provider-specific JSON wrappers
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(parsed, dict):
+        return None
+    value = parsed.get("memory_storage_allowed")
+    return value if isinstance(value, bool) else None
+
+
+def memory_opt_out_requested(transcript: str) -> bool:
+    """Recognise explicit caller requests without mistaking memory-loss speech."""
+    normalized = transcript.replace("’", "'")
+    return any(pattern.search(normalized) for pattern in MEMORY_OPT_OUT_PATTERNS)
+
+
+async def _record_memory_opt_out(run: Any) -> None:
+    await db_client.record_memory_opt_out(
+        organization_id=run.workflow.organization_id,
+        service_user_id=run.service_user_id,
+        source_workflow_run_id=run.id,
+        verification_level=("verified" if run.caller_state == "VERIFIED" else "none"),
+    )
+
+
 def _safe_proposal(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
     text = str(value.get("memory_text") or value.get("text") or "").strip()
     memory_type = str(value.get("memory_type") or value.get("type") or "").strip()
     if not text or len(text) > 2_000 or memory_type not in MEMORY_TYPES:
+        return None
+    # Safety/clinical categories require explicit caller-stated provenance;
+    # model inference alone is not a longitudinal fact.
+    if memory_type in {"risk_factor", "clinical_context"} and value.get(
+        "caller_stated"
+    ) is not True:
         return None
     sensitivity = str(value.get("sensitivity") or "normal").lower()
     if sensitivity not in SENSITIVITIES:
@@ -74,7 +140,11 @@ def _safe_proposal(value: Any) -> dict[str, Any] | None:
     except (TypeError, ValueError):
         importance = confidence = 0.5
     try:
-        expires_days = int(value["expires_days"]) if value.get("expires_days") is not None else None
+        expires_days = (
+            int(value["expires_days"])
+            if value.get("expires_days") is not None
+            else None
+        )
     except (TypeError, ValueError):
         expires_days = None
     if expires_days is not None:
@@ -90,6 +160,10 @@ def _safe_proposal(value: Any) -> dict[str, Any] | None:
     return {
         "memory_text": text,
         "memory_type": memory_type,
+        "fact_key": (
+            str(value.get("fact_key") or "").strip().lower()[:128] or None
+        ),
+        "fact_category": str(value.get("fact_category") or memory_type).strip()[:64],
         "importance": importance,
         "confidence": confidence,
         "sensitivity": sensitivity,
@@ -130,9 +204,23 @@ async def _embed_memories(
         )
         vectors = await service.embed_texts(texts)
         return [vector if len(vector) == 1536 else None for vector in vectors]
-    except Exception:
-        logger.warning("Memory embedding failed; retaining text memory without a vector")
+    except Exception:  # noqa: BLE001 - embeddings are optional persistence enrichment
+        logger.warning(
+            "Memory embedding failed; retaining text memory without a vector"
+        )
         return [None for _ in texts]
+
+
+def _as_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in {"true", "yes", "1"}:
+            return True
+        if v in {"false", "no", "0"}:
+            return False
+    return None
 
 
 async def extract_and_store_memories(workflow_run_id: int) -> int:
@@ -143,12 +231,42 @@ async def extract_and_store_memories(workflow_run_id: int) -> int:
         or run is None
         or not run.service_user_id
         or not run.workflow
-        or run.workflow.name != "Sakinah Scenario Console"
+        or not memory_workflow_allowed(run.workflow.name)
+    ):
+        return 0
+    gathered = run.gathered_context or {}
+    if gathered.get("profile_binding_status") == "unverified_existing":
+        return 0
+    consent = _as_bool(gathered.get("memory_consent"))
+    if consent is not None:
+        try:
+            await db_client.record_privacy_permission(
+                organization_id=run.workflow.organization_id,
+                service_user_id=run.service_user_id,
+                permission_type="memory_storage",
+                granted=consent,
+                verification_level=(
+                    "verified" if run.caller_state == "VERIFIED" else "none"
+                ),
+                source_workflow_run_id=run.id,
+            )
+        except Exception:  # noqa: BLE001 - post-call failure must not affect the call
+            logger.warning("Memory consent could not be recorded")
+            return 0
+    if not await db_client.is_memory_permitted(
+        run.service_user_id, permission_type="memory_storage"
     ):
         return 0
     utterances = await db_client.get_utterances_for_run(workflow_run_id)
     transcript = _transcript_for_prompt(utterances, run.full_transcript)
     if not transcript:
+        return 0
+
+    if memory_opt_out_requested(transcript):
+        try:
+            await _record_memory_opt_out(run)
+        except Exception:  # noqa: BLE001 - post-call failure must not affect the call
+            logger.warning("Memory opt-out could not be persisted for completed call")
         return 0
 
     resolved = await get_resolved_ai_model_configuration(
@@ -158,22 +276,44 @@ async def extract_and_store_memories(workflow_run_id: int) -> int:
         return 0
     system_prompt = (
         "Extract only useful, likely-long-term continuity facts from the transcript. "
-        "Do not extract every utterance, greetings, transient small talk, or unsupported inference. "
-        "Return JSON only: {\"memories\":[{\"memory_text\":string,\"memory_type\":string,"
-        "\"importance\":number,\"confidence\":number,\"sensitivity\":\"low\"|\"normal\"|\"high\"|\"restricted\","
-        "\"source_utterance_sequence\":number|null,\"expires_days\":number|null,"
-        "\"verbal_reference_allowed\":boolean,\"explicit_detail_allowed\":boolean}]} ."
+        "Do not extract every utterance, greetings, transient small talk, or "
+        "unsupported inference. "
+        "Do not persist inferred diagnoses, protected characteristics, identity, "
+        "criminality, medication, risk status, suicidality, psychosis, abuse, or "
+        "safeguarding conclusions. Risk/clinical categories require the caller_stated "
+        "field to be true and must reflect explicit caller words. "
+        "If the caller explicitly asks not to be remembered, set "
+        "memory_storage_allowed to false. "
+        'Return JSON only: {"memory_storage_allowed":boolean,"memories":['
+            '{"memory_text":string,"memory_type":string,'
+            '"fact_key":string|null,"fact_category":string|null,"caller_stated":boolean,'
+        '"importance":number,"confidence":number,"sensitivity":"low"|"normal"|"high"|"restricted",'
+        '"source_utterance_sequence":number|null,"expires_days":number|null,'
+        '"verbal_reference_allowed":boolean,"explicit_detail_allowed":boolean}]} .'
     )
     try:
         llm = create_llm_service(resolved.effective, usage_context="memory_extraction")
         context = LLMContext()
         context.set_messages([{"role": "user", "content": transcript}])
-        raw = await llm.run_inference(context, max_tokens=2500, system_instruction=system_prompt)
-    except Exception:
+        raw = await llm.run_inference(
+            context, max_tokens=2500, system_instruction=system_prompt
+        )
+    except Exception:  # noqa: BLE001 - model extraction is best-effort post-call work
         logger.warning("Memory extraction failed for completed call")
         return 0
 
-    proposals = [item for item in (_safe_proposal(value) for value in _parse_proposals(raw)) if item]
+    if _memory_storage_allowed(raw) is False:
+        try:
+            await _record_memory_opt_out(run)
+        except Exception:  # noqa: BLE001 - post-call failure must not affect the call
+            logger.warning("Memory opt-out could not be persisted for completed call")
+        return 0
+
+    proposals = [
+        item
+        for item in (_safe_proposal(value) for value in _parse_proposals(raw))
+        if item
+    ]
     proposals = proposals[:20]
     vectors = await _embed_memories(
         run.workflow.organization_id,
@@ -184,7 +324,9 @@ async def extract_and_store_memories(workflow_run_id: int) -> int:
     for proposal, vector in zip(proposals, vectors):
         source_sequence = proposal.pop("source_utterance_sequence", None)
         try:
-            source_sequence = int(source_sequence) if source_sequence is not None else None
+            source_sequence = (
+                int(source_sequence) if source_sequence is not None else None
+            )
         except (TypeError, ValueError):
             source_sequence = None
         proposal.update(
@@ -198,6 +340,6 @@ async def extract_and_store_memories(workflow_run_id: int) -> int:
         try:
             await db_client.create_or_confirm_memory(proposal)
             stored += 1
-        except Exception:
+        except Exception:  # noqa: BLE001 - one bad proposal must not discard others
             logger.warning("A proposed memory could not be persisted")
     return stored

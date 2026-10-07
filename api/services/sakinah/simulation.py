@@ -7,6 +7,7 @@ pair; transcript events stream to browsers over a per-simulation event feed.
 
 import asyncio
 import uuid
+from collections import deque
 from datetime import UTC, datetime
 from typing import Any, Dict, Optional
 
@@ -23,7 +24,12 @@ from api.services.pipecat.ws_sender_registry import (
 )
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.sakinah.calm.runtime import EXPERIMENT_MODES, CalmSimulationRuntime
-from api.services.sakinah.calm_evaluation import CalmEvaluator, run_llm_inference
+from api.services.sakinah.calm_evaluation import (
+    CalmEvaluator,
+    enrich_scoring_turn,
+    run_llm_inference,
+)
+from api.services.workflow_run_artifacts import persist_calm_scoring_artifact
 from api.services.sakinah.internal_transport import (
     InternalTransport,
     create_internal_transport_pair,
@@ -45,6 +51,12 @@ MAX_ALLOWED_DURATION_SECONDS = 900
 
 # Give Sakinah a head start so she greets first and the service user replies.
 SERVICE_USER_START_DELAY_SECONDS = 1.5
+
+# The simulation pipelines start as part of the HTTP start request, while the
+# browser can only open the audio WebSocket after that request returns. Keep a
+# short bounded pre-connect window so startup/network latency cannot discard
+# the opening utterance. This remains in-process and is deliberately small.
+AUDIO_BACKLOG_MAX_CHUNKS = 250
 
 # How long to wait for pipelines to wind down gracefully before cancelling.
 GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 15.0
@@ -111,8 +123,10 @@ class Simulation:
         self.events: list[dict] = []
         self.subscribers: set[asyncio.Queue] = set()
         # Listeners for the live conversation audio (raw 16 kHz mono s16le
-        # PCM chunks). Only live audio is streamed; there is no backlog.
+        # PCM chunks). A bounded recent backlog bridges the HTTP response ->
+        # WebSocket connection gap without turning this into durable storage.
         self.audio_subscribers: set[asyncio.Queue] = set()
+        self.audio_backlog: deque[bytes] = deque(maxlen=AUDIO_BACKLOG_MAX_CHUNKS)
         self.watchdog_task: Optional[asyncio.Task] = None
         self.completed_turns: list[dict] = []
         self.active_turns: dict[str, dict] = {}
@@ -120,6 +134,7 @@ class Simulation:
         self.evaluator: CalmEvaluator | None = None
         self._evaluation_llm: Any = None
         self._evaluation_llm_lock = asyncio.Lock()
+        self._calm_persist_lock = asyncio.Lock()
         self._stopping = False
         self._finalized = False
 
@@ -216,6 +231,9 @@ class Simulation:
 
     def publish_audio(self, pcm: bytes) -> None:
         """Fan live PCM out to audio listeners; drop chunks on slow consumers."""
+        if not pcm:
+            return
+        self.audio_backlog.append(pcm)
         for queue in list(self.audio_subscribers):
             try:
                 queue.put_nowait(pcm)
@@ -223,9 +241,14 @@ class Simulation:
                 pass
 
     def subscribe_audio(self) -> asyncio.Queue:
-        # ~250 chunks x 40 ms = 10 s of buffering before we drop.
-        queue: asyncio.Queue = asyncio.Queue(maxsize=250)
+        # ~250 chunks x 40 ms = 10 s of bounded startup/reconnect buffering.
+        queue: asyncio.Queue = asyncio.Queue(maxsize=AUDIO_BACKLOG_MAX_CHUNKS)
         self.audio_subscribers.add(queue)
+        for chunk in self.audio_backlog:
+            try:
+                queue.put_nowait(chunk)
+            except asyncio.QueueFull:
+                break
         return queue
 
     def unsubscribe_audio(self, queue: asyncio.Queue) -> None:
@@ -456,6 +479,15 @@ class SimulationManager:
     def _make_calm_response_callback(self, simulation: Simulation):
         async def record_response(response: str) -> None:
             simulation.calm_runtime.record_response(response or "")
+            if simulation.calm_runtime.sakinah_turns:
+                simulation.publish(
+                    {
+                        "role": SAKINAH_ROLE,
+                        "type": "calm-analysis",
+                        "payload": simulation.calm_runtime.sakinah_turns[-1],
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    }
+                )
 
         return record_response
 
@@ -594,6 +626,42 @@ class SimulationManager:
                 turn_id=turn_id,
                 turns=turns,
             )
+            async with simulation._calm_persist_lock:
+                history = (
+                    simulation.calm_runtime.sakinah_turns
+                    if role == SAKINAH_ROLE else simulation.calm_runtime.turns
+                )
+                target = next(
+                    (turn for turn in reversed(history) if "evaluation" not in turn),
+                    None,
+                )
+                if target is not None:
+                    index = history.index(target)
+                    enrich_scoring_turn(
+                        target, result, history[index - 1] if index else None
+                    )
+                    scoring_payload = {
+                        "version": 2,
+                        "workflow_run_id": simulation.agents[SAKINAH_ROLE].workflow_run_id,
+                        "updated_at": datetime.now(UTC).isoformat(),
+                        "caller": simulation.calm_runtime.turns,
+                        "sakinah": simulation.calm_runtime.sakinah_turns,
+                    }
+                    await db_client.update_workflow_run(
+                        run_id=simulation.agents[SAKINAH_ROLE].workflow_run_id,
+                        annotations={"calm_scoring": scoring_payload},
+                    )
+                    await persist_calm_scoring_artifact(
+                        simulation.agents[SAKINAH_ROLE].workflow_run_id,
+                        scoring_payload,
+                        replicate=True,
+                    )
+                    simulation.publish({
+                        "role": SAKINAH_ROLE,
+                        "type": "calm-analysis",
+                        "payload": target,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    })
             payload = {
                 "turn_id": turn_id,
                 "role": role,
@@ -794,7 +862,7 @@ class SimulationManager:
             return
         simulation._finalized = True
         simulation.ended_at = datetime.now(UTC)
-        simulation.status = "failed" if simulation.error else "completed"
+        final_status = "failed" if simulation.error else "completed"
 
         if simulation.evaluation_tasks:
             await asyncio.gather(
@@ -825,7 +893,7 @@ class SimulationManager:
                 organization_id=simulation.organization_id,
                 ended_at=simulation.ended_at,
                 turns=turns,
-                calm_turns=simulation.calm_runtime.turns,
+                calm_turns=simulation.calm_runtime.turns + simulation.calm_runtime.sakinah_turns,
                 timings={
                     "duration_ms": (
                         simulation.ended_at - simulation.started_at
@@ -839,6 +907,33 @@ class SimulationManager:
             )
 
         if simulation.user_id is not None:
+            # Keep the simulation on the same durable CALM contract as live
+            # WebRTC/telephony runs.  The simulation runtime already owns the
+            # complete caller turn records, so persist them before the final
+            # run snapshot and object replication pass.
+            calm_payload = {
+                "version": 2,
+                "workflow_run_id": simulation.agents[SAKINAH_ROLE].workflow_run_id,
+                "updated_at": simulation.ended_at.isoformat(),
+                "caller": simulation.calm_runtime.turns,
+                "sakinah": simulation.calm_runtime.sakinah_turns,
+            }
+            try:
+                await db_client.update_workflow_run(
+                    run_id=simulation.agents[SAKINAH_ROLE].workflow_run_id,
+                    annotations={"calm_scoring": calm_payload},
+                )
+                await persist_calm_scoring_artifact(
+                    simulation.agents[SAKINAH_ROLE].workflow_run_id,
+                    calm_payload,
+                    replicate=True,
+                )
+            except Exception as exc:  # scoring must not hide the call result
+                logger.warning(
+                    "Simulation {}: CALM artifact persistence failed ({})",
+                    simulation.id,
+                    type(exc).__name__,
+                )
             artifact_references: dict[str, Any] = {}
             for role, agent in simulation.agents.items():
                 artifacts = await db_client.get_workflow_run_artifacts_for_user(
@@ -851,7 +946,7 @@ class SimulationManager:
                 await db_client.complete_sakinah_run(
                     user_id=simulation.user_id,
                     session_id=simulation.id,
-                    status=simulation.status,
+                    status=final_status,
                     ended_at=simulation.ended_at,
                     transcript=_format_simulation_transcript(turns),
                     conversation=turns,
@@ -864,7 +959,7 @@ class SimulationManager:
                     recording_url=primary_artifacts.get("recording_url"),
                     transcript_url=primary_artifacts.get("transcript_url"),
                     recording_file_reference=artifact_references,
-                    calm_turns=simulation.calm_runtime.turns,
+                    calm_turns=simulation.calm_runtime.turns + simulation.calm_runtime.sakinah_turns,
                     timings={
                         "duration_ms": (
                             simulation.ended_at - simulation.started_at
@@ -881,7 +976,16 @@ class SimulationManager:
                 queue.put_nowait(None)
             except asyncio.QueueFull:
                 pass
+        # Finalized simulations remain addressable for their terminal status,
+        # but no late audio connection can usefully consume live PCM. Release
+        # the bounded startup buffer rather than retaining audio in the
+        # process for the lifetime of the in-memory simulation record.
+        simulation.audio_backlog.clear()
 
+        # Publish a terminal state only after persistence and artifact
+        # reconciliation finish. Consumers use this transition as the signal
+        # that finalization is complete.
+        simulation.status = final_status
         simulation.publish_status()
         logger.info(
             f"Simulation {simulation.id} finalized: status={simulation.status} "

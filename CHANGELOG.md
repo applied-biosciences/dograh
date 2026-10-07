@@ -1,4 +1,147 @@
+# v1.47.0.27 (2026-10-07)
+
+- Complete the deferred Sakinah recall side from v1.47.0.26 with an
+  organization-scoped service-user PIN credential backend, bcrypt hashing,
+  DTMF-only enrollment and verification, and bounded brute-force lockout.
+- Add the deterministic returning-caller state machine with a strict
+  recognised-vs-verified distinction and a separate continue/start-fresh gate.
+  Caller ID alone never loads historic information.
+- Retrieve the two newest eligible previous completed calls and permitted active
+  durable memories only after verified CONTINUE, then expose a bounded private
+  continuity context rather than raw transcripts.
+- Add continuity summaries, fact-key-based memory confirmation/revision and
+  supersession provenance while preserving the v1.47.0.26 write path, consent,
+  opt-out, MinIO primary storage and optional S3 replication.
+- Consume PIN DTMF and PIN-entry audio before STT so PINs are excluded from
+  transcripts, utterances, gathered context, prompts, memory, webhook data and
+  normal application logs. Add focused PIN, DTMF, state-gate and continuity tests.
+- Add the `service_user_credentials` migration and Sakinah PIN environment
+  settings. See `docs/reports/v1.47.0.27-smoke-test-report.md`; staging smoke
+  testing and deployment credentials remain separate release work.
+
+# v1.47.0.26 (2026-10-07)
+
+- Start from the v1.47.0.25 implementation branch and preserve existing CALMOS
+  behavior outside the scoped memory-saving and storage-status changes.
+- Allow memory extraction for configured workflows with normalized names, record
+  yes/no answers as privacy permissions before checking eligibility, and retain
+  automatic saving by default when no answer was collected. Preserve caller
+  refusals and the unverified-existing-profile guard.
+- Keep saved memories out of subsequent calls until the later PIN verification
+  build. Add `MEMORY_WORKFLOW_NAMES` and
+  `MEMORY_REQUIRE_EXPLICIT_CONSENT` to the API container environment.
+- Report current per-run S3 replication outcomes in Run Details as copying,
+  successful, or failed, using the existing artifact replication records.
+- Bump the root, API and UI versions to 1.47.0.26. No database migration.
+
+# v1.47.0.24 (2026-10-04)
+
+- Base: v1.47.0.23 CALM/S3 branch, commit 71e91d14.
+- Persist live caller and Sakinah scores, scoring-table rows and prompt data as
+  immutable MinIO revisions, replicated by existing AWS jobs and reconciliation.
+- Flush scores at finalization even without an evaluator. Save delivered responses
+  and the message context used for prompt engineering.
+- Restore Download all scenarios as ZIP with tenant-scoped full-library retrieval.
+- Add Humain Voice TTS, live STT, real profile discovery and manual voice selection.
+- Add configurable Humain IQ LLM support for issued ALLAM 34B deployments.
+- Keep all other v1.47.0.23 production behavior. Update stale CALM test fixtures.
+- Bump API, UI, lockfile and root version markers to 1.47.0.24.
+- Validation: 61 backend tests, 142 UI tests, 18 display-option cases and TypeScript
+  checking passed locally. Live provider/storage verification requires deployment
+  credentials. Backend tests ran on workspace Python 3.12, not production 3.13.
+
 # Changelog
+
+## 1.47.0.21 (2026-09-27)
+
+- Return an actionable `503` when Sakinah simulation startup fails because agent
+  configuration or another server-side prerequisite is unavailable; log the
+  traceback for diagnosis while keeping provider details out of the browser.
+- Keep simulations running when the optional legacy JSON session directory is
+  read-only; the durable database run and live transcript remain authoritative.
+- Add a visible **Export Definition** button to the agent editor. Its ZIP contains
+  the complete React Flow definition and manifest, preserving disconnected/global
+  nodes, edges, node data, and positions for the documented create-from-definition
+  import shape.
+
+## 1.47.0.20 (2026-09-27)
+
+- Fix Sakinah scenario startup when no organization is selected by returning an actionable error instead of an internal server error.
+- Add agent-editor export of the complete React Flow `workflow_definition` (including all nodes and edges) as a JSON file inside a ZIP archive.
+
+## 1.46.0.5 (2026-09-10)
+
+- Integrate inbound-only WhatsApp Business Calling from Dograh PR #732, including Meta webhook verification, HMAC validation, WebRTC media, multi-worker termination, and Meta phone-number synchronisation.
+- Route normalized WhatsApp caller identifiers through the existing CALMOS service-user memory and workflow-run persistence paths; no separate memory store is introduced.
+- Keep existing CALMOS database, transcript, audio, MinIO, optional S3-secondary, CALM, safety, and clinical-evaluation behavior unchanged.
+
+## 1.46.0.4.2.D (2026-09-07)
+
+- Add durable per-artifact S3-secondary reconciliation state and a bounded ARQ repair sweep.
+- Preserve MinIO as primary storage while recording checksum and byte-size verification for secondary copies.
+
+## 1.46.0.4.2.CFix3 (2026-09-07)
+
+- Restore MinIO as the default CALMOS primary artifact store; Stage C S3 remains an opt-in asynchronous secondary copy.
+- Serve WAV artifacts with explicit `audio/wav` metadata and signed inline/attachment response headers for reliable browser preview and download.
+- Preserve Safari download user gestures and redact WebSocket query tokens from access logs.
+
+## 1.46.0.4.2.CFix2 (2026-09-07)
+
+- Keep Simulation audio playback alive across browser idle/autoplay suspension.
+- Surface safe S3 provider error classes during artifact upload and download signing.
+- Avoid requiring KMS permissions when the configured bucket already supplies default encryption.
+
+## 1.46.0.4.2.CFix (2026-09-07)
+
+- Preserve the opening Simulation audio while the browser establishes its authenticated WebSocket.
+- Harden Safari/browser audio-context activation and document the real browser acceptance gate.
+- Provision existing local Sakinah scenarios for the actual local test account without changing AWS data.
+
+## 1.46.0.4.2.C (2026-09-07)
+
+- Added disabled-by-default asynchronous AWS S3 secondary replication from MinIO.
+- Preserved primary finalization and Stage B storage audit behavior when S3 fails.
+
+## 1.46.0.4.2 (2026-09-07)
+
+- Fixed and regression-tested localhost authentication/session handling.
+- Added structured `storage_audit.finalized` logging for call artifact persistence.
+
+## 1.46.0.4.1 (2026-09-07)
+
+- Accept reserved `.test` addresses for local smoke-user registration without changing hosted validation.
+- Harden local browser session installation and add read-only workflow-run storage verification.
+- Verify local Postgres/Redis/MinIO persistence without enabling AWS storage.
+
+## 1.46.0.4 (2026-09-07)
+
+- Restore authenticated workflow listing through the generated SDK and central auth interceptor.
+- Keep localhost authentication and AI-to-AI simulation on the local Docker services.
+
+## 1.46.0.3 (2026-09-06)
+
+- Add normalized service-user caller identifiers with HMAC lookup and explicit verification state.
+- Harden Sakinah memory retrieval with service-user status, consent checks, provenance, and speech permissions.
+- Add private multi-track recording replay with short-lived server-generated URLs and database audit events.
+- Persist transcript keys, recording checksums, latency metrics, and structured CALM/safety/clinical evaluations on native workflow runs.
+- Make production MinIO private by default and add a dry-run-first, checksum-verified MinIO-to-S3 migration tool.
+
+## 1.46.0.2 (2026-09-05)
+
+- Renumber the second CALMOS Connect white-label build from `1.46.1` to `1.46.0.2`.
+- Sync the CALMOS Connect white-label build with upstream Dograh 1.46.0 features and fixes.
+- Retain the white-label Sakinah scenario and simulation updates while carrying forward upstream telephony, disposition, tracing, and observability improvements.
+
+## 1.46.0 (2026-09-03)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+### Features
+* Better telephony setup UX, structured call dispositions, custom transfer dispositions, Cartesia sonic-3.6, Google Tag Manager, Tuner simulation, and telephony phone-ID copy.
+
+### Bug Fixes
+* Transfer disposition and Vicidial lead sync, dynamic disposition filters, unique ARI Stasis app names, private Langfuse traces, structured JSON logging, and Helm worker readiness.
 
 ## 1.45.5 (2026-09-04)
 
@@ -1095,3 +1238,17 @@
 
 * change pipecat to submodule & add github alerts ([a9a97ab](https://github.com/dograh-hq/dograh/commit/a9a97abefb7fee3d909b0111fdb65ff8cec8a530))
 * change pipecat to submodule & add github alerts ([6562963](https://github.com/dograh-hq/dograh/commit/6562963018c613c5439c1253374cef83e088d15d))
+# v1.47.0.23
+
+- Added a CALM scoring switch to agent General settings, saved as `calm_scoring.enabled`.
+- Filled live tester and inbound caller turn panels from the active call, preserving the engineered prompt and every available evaluation dimension in Postgres, MinIO and AWS S3 replication.
+- Added readable alternating caller/Sakinah turn cards, trend deltas, JSON downloads, and separate emotional/safety graphs with score and turn ticks to run details, agent tests, and simulation.
+- Run details now refresh CALM turns during an active call and display the scoring section at the bottom of the summary.
+- Fixed the v1.47.0.22 gap where inbound agents were left without CALM enabled in their published definitions; newly started calls now use the saved scoring switch, and empty panels stay visible.
+- Registered the AWS S3 replication task under its queued job name so ongoing CALM snapshots and final artifacts are copied by the background worker.
+
+# v1.47.0.22
+
+- Restored shared live CALM scoring for Sakinah agent tests, WebRTC, and inbound voice calls.
+- Persisted turn-by-turn caller/Sakinah scores and engineered prompt context in Postgres annotations and MinIO JSON artifacts.
+- Added run-detail/test-page scoring tables, trend arrows, and JSON downloads.

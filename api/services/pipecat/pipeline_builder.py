@@ -36,9 +36,14 @@ def build_pipeline(
     assistant_context_aggregator,
     pipeline_engine_callback_processor,
     pipeline_metrics_aggregator,
+    termination_funnel,
     voicemail_detector=None,
     recording_router=None,
     calm_prompt_processor=None,
+    sakinah_avatar_capture=None,
+    sakinah_secure_input=None,
+    sakinah_user_observer=None,
+    sakinah_output_observer=None,
 ):
     """Build the main pipeline with all components.
 
@@ -51,9 +56,16 @@ def build_pipeline(
             inserts between callback processor and TTS to route between
             pre-recorded audio playback and dynamic TTS.
     """
-    # Build processors list with optional voicemail detection
+    # Build processors list with optional voicemail detection.
+    #
+    # The termination funnel sits directly behind the input transport so every
+    # other processor's upstream frames pass through it -- that is the only
+    # position from which it can intercept a cancellation on its way to the
+    # pipeline worker.
     processors = [
         transport.input(),  # Transport user input
+        termination_funnel,
+        *([sakinah_secure_input] if sakinah_secure_input else []),
         AudioPathDiagnosticsProcessor(stage="input"),
         stt,
     ]
@@ -71,9 +83,13 @@ def build_pipeline(
 
     # Continue with the rest of the pipeline
     post_llm = [pipeline_engine_callback_processor]
+    if sakinah_output_observer:
+        post_llm.append(sakinah_output_observer)
     if recording_router:
         post_llm.append(recording_router)
 
+    if sakinah_user_observer:
+        processors.append(sakinah_user_observer)
     processors.append(user_context_aggregator)
 
     # Insert LLM gate before the main LLM when voicemail detection is enabled.
@@ -88,6 +104,7 @@ def build_pipeline(
             llm,  # LLM
             *post_llm,
             tts,  # TTS
+            *([sakinah_avatar_capture] if sakinah_avatar_capture else []),
             transport.output(),  # Transport bot output
             AudioPathDiagnosticsProcessor(stage="output"),
             audio_buffer,  # AudioBufferProcessor - records both input and output audio
@@ -107,8 +124,12 @@ def build_realtime_pipeline(
     assistant_context_aggregator,
     pipeline_engine_callback_processor,
     pipeline_metrics_aggregator,
+    termination_funnel,
     voicemail_detector=None,
     calm_prompt_processor=None,
+    sakinah_secure_input=None,
+    sakinah_user_observer=None,
+    sakinah_output_observer=None,
 ):
     """Build a pipeline for realtime (speech-to-speech) LLM services.
 
@@ -137,15 +158,23 @@ def build_realtime_pipeline(
     """
     processors = [
         transport.input(),
+        termination_funnel,
+        *([sakinah_secure_input] if sakinah_secure_input else []),
         AudioPathDiagnosticsProcessor(stage="input"),
         user_context_aggregator,
         *([calm_prompt_processor] if calm_prompt_processor else []),
         realtime_llm,
     ]
 
+    if sakinah_user_observer:
+        processors.append(sakinah_user_observer)
+
     if voicemail_detector:
         logger.info("Adding native voicemail detector to realtime pipeline")
         processors.append(voicemail_detector.detector())
+
+    if sakinah_output_observer:
+        processors.append(sakinah_output_observer)
 
     processors.extend(
         [

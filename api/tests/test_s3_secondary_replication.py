@@ -1,0 +1,305 @@
+import asyncio
+from pathlib import Path
+from typing import ClassVar
+from unittest.mock import AsyncMock
+
+import pytest
+from botocore.exceptions import ClientError
+
+from api.services import s3_secondary_replication as replication
+
+
+@pytest.fixture(autouse=True)
+def replication_writes(monkeypatch):
+    """Unit tests exercise copy IO without contacting a database."""
+    monkeypatch.setattr("api.db.db_client.upsert_artifact_replication_status", AsyncMock())
+    update = AsyncMock()
+    monkeypatch.setattr("api.db.db_client.update_artifact_replication_status", update)
+    return update
+
+
+def _refs():
+    return [
+        {
+            "type": "call",
+            "object_key": "recordings/2026/09/service/call-1/call.wav",
+            "size_bytes": 4,
+        },
+        {
+            "type": "transcript",
+            "object_key": "transcripts/2026/09/service/call-1/transcript.txt",
+            "size_bytes": 4,
+        },
+    ]
+
+
+class _Primary:
+    objects: ClassVar = {
+        "recordings/2026/09/service/call-1/call.wav": b"WAVE",
+        "transcripts/2026/09/service/call-1/transcript.txt": b"TEXT",
+    }
+
+    async def adownload_file(self, source_key, local_path):
+        data = self.objects.get(source_key)
+        if data is None:
+            return False
+        await asyncio.to_thread(Path(local_path).write_bytes, data)
+        return True
+
+
+class _Secondary:
+    def __init__(self, failures=0, error=None):
+        self.failures = failures
+        self.error = error or RuntimeError("S3UploadFailed")
+        self.uploads = []
+
+    async def aupload_file_checked(self, local_path, destination_key, **_kwargs):
+        if self.failures:
+            self.failures -= 1
+            raise self.error
+        self.uploads.append((destination_key, await asyncio.to_thread(Path(local_path).read_bytes)))
+
+
+@pytest.mark.asyncio
+async def test_disabled_secondary_does_not_enqueue_or_initialize_s3(monkeypatch):
+    monkeypatch.setattr(replication, "ENABLE_AWS_S3_SECONDARY", False)
+    monkeypatch.setattr(replication, "AWS_RECORDINGS_BUCKET", None)
+    monkeypatch.setattr(
+        replication,
+        "S3FileSystem",
+        lambda **kwargs: pytest.fail("S3 must not be initialized when disabled"),
+    )
+
+    result = await replication.replicate_workflow_run_artifacts_to_s3(
+        None, 1, _refs()
+    )
+
+    assert result["status"] == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_configured_bucket_enables_secondary_without_flag(monkeypatch):
+    monkeypatch.setattr(replication, "ENABLE_AWS_S3_SECONDARY", False)
+    monkeypatch.setattr(replication, "AWS_RECORDINGS_BUCKET", "private-test-bucket")
+    monkeypatch.setattr(
+        replication,
+        "get_current_storage_backend",
+        lambda: replication.StorageBackend.MINIO,
+    )
+
+    result = replication.secondary_status(_refs())
+
+    assert result["status"] == "pending"
+    assert result["bucket"] == "private-test-bucket"
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_uses_configured_bucket_without_flag(monkeypatch):
+    monkeypatch.setattr(replication, "ENABLE_AWS_S3_SECONDARY", False)
+    monkeypatch.setattr(replication, "AWS_RECORDINGS_BUCKET", "private-test-bucket")
+    monkeypatch.setattr(
+        "api.db.db_client.get_pending_artifact_replications",
+        AsyncMock(return_value=[]),
+    )
+
+    result = await replication.reconcile_pending_s3_replications(None)
+
+    assert result == {
+        "status": "success",
+        "runs": 0,
+        "artifacts": 0,
+        "results": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_schedule_preserves_primary_keys_and_reports_pending(monkeypatch):
+    monkeypatch.setattr(replication, "ENABLE_AWS_S3_SECONDARY", True)
+    monkeypatch.setattr(replication, "AWS_RECORDINGS_BUCKET", "private-test-bucket")
+    monkeypatch.setattr(replication, "AWS_S3_PREFIX", "calmos")
+    monkeypatch.setattr(
+        replication,
+        "get_current_storage_backend",
+        lambda: replication.StorageBackend.MINIO,
+    )
+    calls = []
+
+    async def enqueue(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(
+        "api.tasks.arq.enqueue_job",
+        enqueue,
+    )
+
+    result = await replication.schedule_s3_replication(
+        88,
+        {
+            "recordings": {"objects": [{**_refs()[0], "status": "success"}]},
+            "transcript": {"status": "not_expected"},
+        },
+    )
+
+    assert result["status"] == "pending"
+    assert result["objects"][0]["source_object_key"].startswith("recordings/")
+    assert result["objects"][0]["object_key"].startswith("calmos/recordings/")
+    assert calls[0][0][0] == replication.FunctionNames.REPLICATE_WORKFLOW_RUN_ARTIFACTS_S3
+    assert calls[0][0][1] == 88
+
+
+@pytest.mark.asyncio
+async def test_failed_enqueue_records_failure_for_each_artifact(monkeypatch, replication_writes):
+    monkeypatch.setattr(replication, "AWS_RECORDINGS_BUCKET", "test-backup")
+    monkeypatch.setattr(replication, "get_current_storage_backend", lambda: replication.StorageBackend.MINIO)
+    monkeypatch.setattr("api.tasks.arq.enqueue_job", AsyncMock(side_effect=ConnectionError()))
+    result = await replication.schedule_s3_replication(88, {
+        "storage_backend": "minio",
+        "recordings": {"objects": [{**ref, "status": "success"} for ref in _refs()]},
+    })
+    assert result["status"] == "failed"
+    assert replication_writes.await_count == 2
+    for call, ref in zip(replication_writes.call_args_list, _refs()):
+        assert call.kwargs["run_id"] == 88
+        assert call.kwargs["primary_object_key"] == ref["object_key"]
+        assert call.kwargs["replication_status"] == "failed"
+        assert call.kwargs["s3_saved"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status, durable_status, saved", [("success", "synced", True), ("failed", "failed", False)])
+async def test_copy_result_records_authoritative_status(replication_writes, status, durable_status, saved):
+    await replication._record_replication_result(88, "recordings/test.wav", {"status": status, "attempt": 2})
+    assert replication_writes.call_args.kwargs["replication_status"] == durable_status
+    assert replication_writes.call_args.kwargs["s3_saved"] is saved
+
+
+@pytest.mark.asyncio
+async def test_successful_copy_preserves_exact_bytes_and_emits_event(monkeypatch):
+    primary = _Primary()
+    secondary = _Secondary()
+    events = []
+
+    def record_event(**kwargs):
+        events.append(kwargs)
+
+    monkeypatch.setattr(replication, "storage_fs", primary)
+    monkeypatch.setattr(replication, "AWS_RECORDINGS_BUCKET", "private-test-bucket")
+    monkeypatch.setattr(replication, "AWS_S3_PREFIX", "")
+    monkeypatch.setattr(replication, "_log_replication_event", record_event)
+
+    result = await replication._replicate_one(secondary, 88, _refs()[0])
+
+    assert result["status"] == "success"
+    assert secondary.uploads == [(_refs()[0]["object_key"], b"WAVE")]
+    assert events[0]["status"] == "success"
+    assert events[0]["object_key"] == _refs()[0]["object_key"]
+
+
+@pytest.mark.asyncio
+async def test_retry_then_success_does_not_change_primary(monkeypatch):
+    primary = _Primary()
+    secondary = _Secondary(failures=1, error=TimeoutError())
+    events = []
+    sleeps = []
+
+    def record_event(**kwargs):
+        events.append(kwargs)
+
+    monkeypatch.setattr(replication, "storage_fs", primary)
+    monkeypatch.setattr(replication, "AWS_RECORDINGS_BUCKET", "private-test-bucket")
+    monkeypatch.setattr(replication, "_log_replication_event", record_event)
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(replication.asyncio, "sleep", record_sleep)
+
+    result = await replication._replicate_one(secondary, 88, _refs()[0])
+
+    assert result["status"] == "success"
+    assert result["attempt"] == 2
+    assert secondary.uploads == [(_refs()[0]["object_key"], b"WAVE")]
+    assert sleeps == [0.25]
+    assert primary.objects[_refs()[0]["object_key"]] == b"WAVE"
+    assert events[-1]["status"] == "success"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [PermissionError(), FileNotFoundError(), TimeoutError()])
+async def test_retry_exhaustion_isolated_and_classified(monkeypatch, error):
+    primary = _Primary()
+    secondary = _Secondary(failures=10, error=error)
+    events = []
+
+    def record_event(**kwargs):
+        events.append(kwargs)
+
+    monkeypatch.setattr(replication, "storage_fs", primary)
+    monkeypatch.setattr(replication, "AWS_RECORDINGS_BUCKET", "private-test-bucket")
+    monkeypatch.setattr(replication, "_log_replication_event", record_event)
+    async def skip_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(replication.asyncio, "sleep", skip_sleep)
+
+    result = await replication._replicate_one(secondary, 88, _refs()[0])
+
+    assert result["status"] == "failed"
+    assert result["attempt"] == 3
+    assert result["error_class"] == type(error).__name__
+    assert events[-1]["status"] == "failed"
+    assert primary.objects[_refs()[0]["object_key"]] == b"WAVE"
+
+
+@pytest.mark.asyncio
+async def test_missing_bucket_is_not_configured(monkeypatch):
+    monkeypatch.setattr(replication, "ENABLE_AWS_S3_SECONDARY", True)
+    monkeypatch.setattr(replication, "AWS_RECORDINGS_BUCKET", None)
+    monkeypatch.setattr(
+        replication,
+        "get_current_storage_backend",
+        lambda: replication.StorageBackend.MINIO,
+    )
+
+    result = replication.secondary_status(_refs())
+
+    assert result["status"] == "not_configured"
+
+
+@pytest.mark.asyncio
+async def test_provider_access_denied_code_is_safe_and_specific(monkeypatch):
+    primary = _Primary()
+    secondary = _Secondary(
+        failures=3,
+        error=ClientError(
+            {"Error": {"Code": "AccessDenied", "Message": "denied"}},
+            "PutObject",
+        ),
+    )
+    events = []
+
+    monkeypatch.setattr(replication, "storage_fs", primary)
+    monkeypatch.setattr(replication, "AWS_RECORDINGS_BUCKET", "private-test-bucket")
+
+    def record_event(**kwargs):
+        events.append(kwargs)
+
+    monkeypatch.setattr(replication, "_log_replication_event", record_event)
+
+    async def skip_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(replication.asyncio, "sleep", skip_sleep)
+
+    result = await replication._replicate_one(secondary, 88, _refs()[0])
+
+    assert result["status"] == "failed"
+    assert result["error_class"] == "AccessDenied"
+    assert events[-1]["error_class"] == "AccessDenied"
+def test_replication_job_name_is_registered_on_worker():
+    from api.tasks.arq import WorkerSettings
+
+    registered = {
+        getattr(task, "name", getattr(task, "__name__", None))
+        for task in WorkerSettings.functions
+    }
+    assert replication.FunctionNames.REPLICATE_WORKFLOW_RUN_ARTIFACTS_S3 in registered

@@ -14,6 +14,7 @@ from api.schemas.workflow_configurations import (
     DEFAULT_SMART_TURN_STOP_SECS,
     DEFAULT_TURN_START_MIN_WORDS,
     DEFAULT_TURN_START_STRATEGY,
+    WorkflowConfigurationDefaults,
 )
 from api.services.call_concurrency import call_concurrency
 from api.services.configuration.registry import ServiceProviders
@@ -22,6 +23,16 @@ from api.services.integrations import (
     create_runtime_sessions,
 )
 from api.services.memory.orchestrator import prepare_memory_context
+from api.services.sakinah.continuity import (
+    is_continuity_workflow,
+    prepare_sakinah_identity,
+)
+from api.services.sakinah.pin_runtime import (
+    SakinahIdentityOutputObserver,
+    SakinahIdentityRuntime,
+    SakinahIdentityUserObserver,
+    SakinahSecureInputProcessor,
+)
 from api.services.observability.active_calls import (
     register_active_call as register_worker_active_call,
 )
@@ -57,6 +68,7 @@ from api.services.pipecat.recording_audio_cache import (
     warm_recording_cache,
 )
 from api.services.pipecat.recording_router_processor import RecordingRouterProcessor
+from api.services.pipecat.sakinah_avatar_capture import create_sakinah_avatar_capture
 from api.services.pipecat.service_factory import (
     create_llm_service,
     create_llm_service_from_provider,
@@ -64,6 +76,9 @@ from api.services.pipecat.service_factory import (
     create_stt_service,
     create_tts_service,
     stt_uses_external_turns,
+)
+from api.services.pipecat.termination_funnel_processor import (
+    TerminationFunnelProcessor,
 )
 from api.services.pipecat.tracing_config import (
     ensure_tracing,
@@ -654,10 +669,46 @@ async def _run_pipeline_impl(
     else:
         user_config = resolved_user_config
 
-    # Resolve Sakinah continuity before the first conversational turn. The
-    # orchestrator is privacy-bounded and timeout-protected; persistence must
-    # never prevent a live call from connecting.
-    if workflow.name != "Sakinah Scenario Console":
+    # Resolve caller state before the first conversational turn. Telephone
+    # recognition is only a candidate; the Sakinah continuity workflow adds a
+    # deterministic PIN gate and never loads history here.
+    sakinah_identity_context = None
+    if is_continuity_workflow(workflow.name):
+        try:
+            sakinah_identity_context = await asyncio.wait_for(
+                prepare_sakinah_identity(
+                    organization_id=workflow.organization_id,
+                    call_context=merged_call_context_vars,
+                ),
+                timeout=2.0,
+            )
+        except Exception:
+            logger.warning("Sakinah identity unavailable; continuing without history")
+            sakinah_identity_context = await prepare_sakinah_identity(
+                organization_id=None,
+                call_context={},
+            )
+        merged_call_context_vars.update(
+            {
+                key: value
+                for key, value in sakinah_identity_context.items()
+                if key != "service_user_id" or value is not None
+            }
+        )
+        if sakinah_identity_context.get("service_user_id"):
+            try:
+                await db_client.update_workflow_run(
+                    workflow_run_id,
+                    service_user_id=sakinah_identity_context["service_user_id"],
+                    caller_identifier_id=sakinah_identity_context["caller_identifier_id"],
+                    caller_state=sakinah_identity_context["caller_status"],
+                )
+            except Exception:
+                logger.warning(
+                    "Unable to persist Sakinah service-user association for run {}",
+                    workflow_run_id,
+                )
+    elif workflow.name != "Sakinah Scenario Console":
         caller_identifier = (
             merged_call_context_vars.get("caller_identifier")
             or merged_call_context_vars.get("caller_number")
@@ -665,14 +716,24 @@ async def _run_pipeline_impl(
         )
         if caller_identifier and workflow.organization_id:
             try:
-                service_user, _ = await db_client.get_or_create_service_user(
+                identity = await db_client.resolve_caller_identity(
                     workflow.organization_id, str(caller_identifier)
                 )
                 await db_client.update_workflow_run(
-                    workflow_run_id, service_user_id=service_user.id
+                    workflow_run_id,
+                    service_user_id=identity.service_user.id,
+                    caller_identifier_id=identity.caller_identifier.id,
+                    caller_state=(
+                        "VERIFIED"
+                        if identity.caller_identifier.verified
+                        else ("FIRST_TIME" if identity.created else "RECOGNISED")
+                    ),
                 )
             except Exception:
-                logger.warning("Unable to associate a service user with workflow run {}", workflow_run_id)
+                logger.warning(
+                    "Unable to associate a service user with workflow run {}",
+                    workflow_run_id,
+                )
     else:
         try:
             memory_context = await asyncio.wait_for(
@@ -683,7 +744,9 @@ async def _run_pipeline_impl(
                 timeout=2.0,
             )
         except Exception:
-            logger.warning("Sakinah memory context unavailable; using UNKNOWN caller context")
+            logger.warning(
+                "Sakinah memory context unavailable; using UNKNOWN caller context"
+            )
             memory_context = await prepare_memory_context(
                 organization_id=None,
                 call_context={},
@@ -704,15 +767,25 @@ async def _run_pipeline_impl(
                 await db_client.update_workflow_run(
                     workflow_run_id,
                     service_user_id=memory_context["service_user_id"],
+                    caller_identifier_id=memory_context["caller_identifier_id"],
+                    caller_state=memory_context["caller_status"],
                 )
             except Exception:
-                logger.warning("Unable to persist Sakinah service-user association for run {}", workflow_run_id)
+                logger.warning(
+                    "Unable to persist Sakinah service-user association for run {}",
+                    workflow_run_id,
+                )
 
     workflow_graph = WorkflowGraph(
         ReactFlowDTO.model_validate(run_workflow_json),
         skip_instance_constraints_for={"trigger"},
     )
-    uses_variable_extraction = workflow_graph.uses_variable_extraction()
+    call_dispositions = WorkflowConfigurationDefaults.model_validate(
+        {"call_dispositions": run_configs.get("call_dispositions") or []}
+    ).call_dispositions
+    needs_extraction_llm = workflow_graph.uses_variable_extraction() or bool(
+        call_dispositions
+    )
 
     from api.services.managed_model_services import (
         MPS_CORRELATION_ID_CONTEXT_KEY,
@@ -757,16 +830,16 @@ async def _run_pipeline_impl(
         llm = create_llm_service(user_config, correlation_id=mps_correlation_id)
         inference_llm = None
 
-    # A shared LLM cannot carry an extraction usage_context without also tagging
-    # normal conversation or context-summarization requests. Create a dedicated
-    # client only for the managed provider; other providers ignore usage_context.
+    # Variable and disposition extraction may share this out-of-band LLM. A
+    # shared conversation LLM cannot carry an extraction usage_context without
+    # also tagging normal conversation or context-summarization requests.
     variable_extraction_llm = (
         create_llm_service(
             user_config,
             correlation_id=mps_correlation_id,
             usage_context="variable_extraction",
         )
-        if uses_variable_extraction
+        if needs_extraction_llm
         and user_config.llm.provider == ServiceProviders.DOGRAH.value
         else inference_llm or llm
     )
@@ -839,6 +912,91 @@ async def _run_pipeline_impl(
 
     # Create node transition callback (always logs to buffer, optionally streams to WS)
     ws_sender = get_ws_sender(workflow_run_id)
+
+    # CALM used to be enabled only by the Sakinah simulation wrapper.  Keep
+    # that explicit callback behaviour, but also enable the same runtime for
+    # Sakinah live/test workflows so WebRTC and inbound voice calls receive
+    # identical turn events and durable scoring.
+    live_calm = None
+    # The settings switch is an operational scoring control.  It applies to
+    # newly started inbound calls even when their conversation definition is
+    # pinned to a published version that predates CALM scoring.
+    workflow_calm = (getattr(workflow, "workflow_configurations", None) or {}).get(
+        "calm_scoring"
+    )
+    calm_config = workflow_calm if isinstance(workflow_calm, dict) else (
+        (run_configs or {}).get("calm_scoring") or {}
+    )
+    calm_enabled = bool(calm_config.get("enabled")) or bool(
+        (workflow_run.initial_context or {}).get("calm_enabled")
+    )
+    if calm_prompt_callback is None and calm_enabled:
+        from api.services.sakinah.live_calm import LiveCalmSession, latest_user_turn
+        from api.services.sakinah.calm_evaluation import run_llm_inference
+
+        evaluation_inference = None
+        if user_config.llm is not None:
+            try:
+                evaluation_llm = create_llm_service(
+                    user_config,
+                    correlation_id=mps_correlation_id,
+                    usage_context="calm_evaluation",
+                )
+
+                async def evaluation_inference(messages, system_prompt):
+                    return await run_llm_inference(
+                        evaluation_llm, messages, system_prompt
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "CALM evaluator unavailable for run {} ({})",
+                    workflow_run_id, type(exc).__name__,
+                )
+
+        async def publish_calm_turn(turn):
+            message = {"type": "calm-analysis", "payload": {"role": turn["role"], **turn}}
+            await in_memory_logs_buffer.append(message)
+            if ws_sender:
+                await ws_sender(message)
+
+        live_calm = LiveCalmSession(
+            workflow_run_id,
+            scenario=str((workflow_run.initial_context or {}).get("scenario") or ""),
+            evaluation_inference=evaluation_inference,
+            on_update=publish_calm_turn,
+        )
+
+        async def live_calm_prompt_callback(engine, context):
+            messages = context.get_messages()
+            latest = latest_user_turn(messages)
+            if not latest:
+                return
+            turn = live_calm.analyse_user(
+                latest[1],
+                [{"role": m.get("role"), "text": m.get("content", "")} for m in messages[-6:] if isinstance(m, dict)],
+                source_turn_key=latest[0],
+            )
+            if not turn:
+                return
+            await engine._update_llm_context(turn["prompt_sent_to_llm"], [])
+            turn["llm_messages"] = [
+                {"role": message.get("role"), "content": message.get("content")}
+                for message in context.get_messages() if isinstance(message, dict)
+            ]
+            await live_calm.persist()
+            await publish_calm_turn(turn)
+            live_calm.schedule_evaluation(turn)
+
+        async def live_calm_response_callback(response):
+            turn = live_calm.record_sakinah(response)
+            if not turn:
+                return
+            await live_calm.persist()
+            await publish_calm_turn(turn)
+            live_calm.schedule_evaluation(turn)
+
+        calm_prompt_callback = live_calm_prompt_callback
+        calm_response_callback = live_calm_response_callback
 
     async def send_node_transition(
         node_id: str,
@@ -924,6 +1082,7 @@ async def _run_pipeline_impl(
         embeddings_api_version=embeddings_api_version,
         has_recordings=has_recordings,
         context_compaction_enabled=context_compaction_enabled,
+        call_dispositions=call_dispositions,
     )
 
     # Create pipeline components
@@ -944,6 +1103,25 @@ async def _run_pipeline_impl(
     # Set the context, audio_config, and audio_buffer after creation
     engine.set_context(context)
     engine.set_audio_config(audio_config)
+
+    sakinah_identity_runtime = None
+    sakinah_secure_input = None
+    sakinah_user_observer = None
+    sakinah_output_observer = None
+    if (
+        is_continuity_workflow(workflow.name)
+        and sakinah_identity_context
+        and sakinah_identity_context.get("service_user_id")
+        and workflow.organization_id
+    ):
+        sakinah_identity_runtime = SakinahIdentityRuntime(
+            engine=engine,
+            organization_id=workflow.organization_id,
+            identity=sakinah_identity_context,
+        )
+        sakinah_secure_input = SakinahSecureInputProcessor(sakinah_identity_runtime)
+        sakinah_user_observer = SakinahIdentityUserObserver(sakinah_identity_runtime)
+        sakinah_output_observer = SakinahIdentityOutputObserver(sakinah_identity_runtime)
 
     assistant_params = LLMAssistantAggregatorParams(
         correct_aggregation_callback=engine.create_aggregation_correction_callback(),
@@ -1024,6 +1202,11 @@ async def _run_pipeline_impl(
 
     pipeline_metrics_aggregator = PipelineMetricsAggregator()
 
+    # Terminations raised from inside the pipeline are handed to the engine
+    # instead of cancelling the worker directly. Its handler is registered by
+    # `register_event_handlers` once the task exists.
+    termination_funnel = TerminationFunnelProcessor()
+
     user_context_aggregator = context_aggregator.user()
     assistant_context_aggregator = context_aggregator.assistant()
 
@@ -1088,7 +1271,7 @@ async def _run_pipeline_impl(
         async def _on_voicemail_detected(_processor):
             logger.info(f"Voicemail detected for workflow run {workflow_run_id}")
             await engine.end_call_with_reason(
-                reason=EndTaskReason.VOICEMAIL_DETECTED.value,
+                call_status=EndTaskReason.VOICEMAIL_DETECTED.value,
                 abort_immediately=True,
             )
 
@@ -1127,10 +1310,15 @@ async def _run_pipeline_impl(
             assistant_context_aggregator,
             pipeline_engine_callback_processor,
             pipeline_metrics_aggregator,
+            termination_funnel,
             voicemail_detector=voicemail_detector,
             calm_prompt_processor=calm_prompt_processor,
+            sakinah_secure_input=sakinah_secure_input,
+            sakinah_user_observer=sakinah_user_observer,
+            sakinah_output_observer=sakinah_output_observer,
         )
     else:
+        sakinah_avatar_capture = create_sakinah_avatar_capture(workflow_run_id)
         pipeline = build_pipeline(
             transport,
             stt,
@@ -1141,9 +1329,14 @@ async def _run_pipeline_impl(
             assistant_context_aggregator,
             pipeline_engine_callback_processor,
             pipeline_metrics_aggregator,
+            termination_funnel,
             voicemail_detector=voicemail_detector,
             recording_router=recording_router,
             calm_prompt_processor=calm_prompt_processor,
+            sakinah_avatar_capture=sakinah_avatar_capture,
+            sakinah_secure_input=sakinah_secure_input,
+            sakinah_user_observer=sakinah_user_observer,
+            sakinah_output_observer=sakinah_output_observer,
         )
 
     # Create pipeline task with audio configuration
@@ -1232,11 +1425,13 @@ async def _run_pipeline_impl(
         in_memory_logs_buffer=in_memory_logs_buffer,
         transcript_log_coordinator=transcript_log_coordinator,
         pipeline_metrics_aggregator=pipeline_metrics_aggregator,
+        termination_funnel=termination_funnel,
         audio_config=audio_config,
         pre_call_fetch_task=pre_call_fetch_task,
         user_provider_id=user_provider_id,
         integration_runtime_sessions=integration_runtime_sessions,
         include_transcript_end_timestamps=include_transcript_end_timestamps,
+        calm_finalize=live_calm.wait_for_evaluations if live_calm else None,
     )
 
     register_audio_data_handler(audio_buffer, workflow_run_id, in_memory_audio_buffer)

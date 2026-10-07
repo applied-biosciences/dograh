@@ -1,6 +1,7 @@
 "use client";
 
 import { ReactFlowInstance } from "@xyflow/react";
+import JSZip from "jszip";
 import { AlertCircle, ArrowLeft, Bot, Clipboard, Copy, Download, Eye, History, LoaderCircle, Menu, MoreVertical, Pencil, Phone, Rocket } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
@@ -47,6 +48,8 @@ interface WorkflowEditorHeaderProps {
     hasDraft: boolean;
     onPublished: () => void;
     renameWorkflow: (newName: string) => Promise<void>;
+    calmScoringEnabled: boolean;
+    onCalmScoringChange: (enabled: boolean) => Promise<void>;
 }
 
 export const WorkflowEditorHeader = ({
@@ -66,6 +69,8 @@ export const WorkflowEditorHeader = ({
     workflowId,
     workflowUuid,
     renameWorkflow,
+    calmScoringEnabled,
+    onCalmScoringChange,
 }: WorkflowEditorHeaderProps) => {
     const router = useRouter();
     const { toggleSidebar } = useSidebar();
@@ -151,7 +156,7 @@ export const WorkflowEditorHeader = ({
         }
     };
 
-    const handleDownloadWorkflow = () => {
+    const handleDownloadWorkflow = async () => {
         if (!rfInstance.current) return;
 
         const workflowDefinition = rfInstance.current.toObject();
@@ -169,6 +174,38 @@ export const WorkflowEditorHeader = ({
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
+    };
+
+    const handleDownloadDefinitionZip = async () => {
+        if (!rfInstance.current) {
+            toast.error("Workflow definition is not ready yet");
+            return;
+        }
+        const workflowDefinition = rfInstance.current.toObject();
+        const definition = {
+            name: workflowName,
+            workflow_definition: workflowDefinition,
+        };
+        const zip = new JSZip();
+        zip.file("workflow_definition.json", JSON.stringify(definition, null, 2));
+        zip.file("manifest.json", JSON.stringify({
+            format: "dograh-agent-definition",
+            version: 1,
+            name: workflowName,
+            files: ["workflow_definition.json"],
+            node_count: workflowDefinition.nodes.length,
+            edge_count: workflowDefinition.edges.length,
+        }, null, 2));
+        const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${workflowName}.definition.zip`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        toast.success("Agent definition ZIP downloaded");
     };
 
     const enterEditMode = () => {
@@ -429,6 +466,27 @@ export const WorkflowEditorHeader = ({
                     Test Agent
                 </Button>
 
+                <Button
+                    variant="outline"
+                    className="flex items-center gap-2 bg-transparent border-[#3a3a3a] hover:bg-[#2a2a2a] text-white"
+                    onClick={() => void onCalmScoringChange(!calmScoringEnabled)}
+                    aria-pressed={calmScoringEnabled}
+                    aria-label="Toggle CALM turn-by-turn scoring"
+                >
+                    <span className={`h-2.5 w-2.5 rounded-full ${calmScoringEnabled ? 'bg-emerald-400' : 'bg-gray-500'}`} />
+                    CALM scoring {calmScoringEnabled ? 'On' : 'Off'}
+                </Button>
+
+                <Button
+                    variant="outline"
+                    className="flex items-center gap-2 bg-transparent border-[#3a3a3a] hover:bg-[#2a2a2a] text-white"
+                    onClick={() => void handleDownloadDefinitionZip()}
+                    aria-label="Download complete agent definition ZIP"
+                >
+                    <Download className="w-4 h-4" />
+                    Export Definition
+                </Button>
+
                 {/* Save button (only shown when editing the draft) */}
                 {!isViewingHistoricalVersion && (
                     <Button
@@ -479,11 +537,18 @@ export const WorkflowEditorHeader = ({
                             {duplicating ? "Duplicating..." : "Duplicate Workflow"}
                         </DropdownMenuItem>
                         <DropdownMenuItem
-                            onClick={handleDownloadWorkflow}
+                            onClick={() => void handleDownloadWorkflow()}
                             className="text-white hover:bg-[#2a2a2a] cursor-pointer"
                         >
                             <Download className="w-4 h-4 mr-2" />
                             Download Workflow
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                            onClick={() => void handleDownloadDefinitionZip()}
+                            className="text-white hover:bg-[#2a2a2a] cursor-pointer"
+                        >
+                            <Download className="w-4 h-4 mr-2" />
+                            Download Definition ZIP
                         </DropdownMenuItem>
                         <DropdownMenuItem
                             onClick={handleCopyAgentUuid}

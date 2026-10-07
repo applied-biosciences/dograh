@@ -1,6 +1,6 @@
 # Dograh AI
 
-> **CALMOS Connect white-label v1.45.6** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): this fork adds the Sakinah Scenario Console, AI-to-AI simulation, durable call storage, privacy-controlled memory, and scenario search — see [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.45.6.mdx`](docs/developer/calmos-connect-v1.45.6.mdx).
+> **CALMOS Connect white-label v1.46.0.5** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): this fork adds the Sakinah Scenario Console, AI-to-AI simulation, durable call storage, privacy-controlled memory, scenario search, and inbound WhatsApp Business calling — see [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
 > **Deployment limitation**: run the API with a **single worker** (`FASTAPI_WORKERS=1`, the default). Simulations keep in-process state, so with multiple workers the simulation status/stop endpoints and the transcript/audio WebSockets intermittently land on a worker that doesn't own the simulation ([#4](https://github.com/applied-biosciences/dograh/issues/4)).
 
 <p align="center">
@@ -20,7 +20,7 @@
     <img src="https://img.shields.io/badge/⚡_Self--host_in_60s-One_command-111827?style=for-the-badge" alt="Self-host in 60s">
   </a>
   &nbsp;
-  <a href="https://join.slack.com/t/dograh-community/shared_invite/zt-3zjb5vwvl-j7hRz3_F1SOn5cH~jm5f5g">
+  <a href="https://join.slack.com/t/dograh-community/shared_invite/zt-4787daqcn-3TDiQUh~3xrr3pwAqR9wpQ">
     <img src="https://img.shields.io/badge/💬_Join_Slack-Community-4A154B?style=for-the-badge&logo=slack" alt="Join Slack">
   </a>
 </p>
@@ -41,8 +41,14 @@
 - **Maintained by YC alumni and exit founders**, committed to keeping voice AI open
 
 <p align="center">
-  <a href="https://www.producthunt.com/products/dograh?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-dograh-3" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1217382&theme=light&period=daily&t=1786607298379" alt="Dograh - The open source VAPI alternative | Product Hunt" width="250" height="54"></a>
+  <a href="https://www.producthunt.com/products/dograh?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-dograh-3" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1217382&theme=light&period=daily&t=1786607298379" alt="Dograh - #1 Product of the Day | Product Hunt" width="250" height="54"></a>
   &nbsp;
+  <a href="https://www.producthunt.com/products/dograh?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-dograh-3" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1217382&theme=light&period=weekly&t=1786966826740" alt="Dograh - #1 Product of the Week | Product Hunt" width="250" height="54"></a>
+  <br />
+  <a href="https://www.producthunt.com/products/dograh?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-dograh-3" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1217382&theme=neutral&period=monthly&t=1788261987782" alt="Dograh - #1 Product of the Month | Product Hunt" width="250" height="54"></a>
+  &nbsp;
+  <a href="https://www.producthunt.com/products/dograh?embed=true&utm_source=badge-top-post-topic-badge&utm_medium=badge&utm_campaign=badge-dograh-3" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-topic-badge.svg?post_id=1217382&theme=neutral&period=monthly&topic_id=267&t=1788261987782" alt="Dograh - #1 Product of the Month, Developer Tools | Product Hunt" width="250" height="54"></a>
+  <br />
   <a href="https://trendshift.io/repositories/31007" target="_blank"><img src="https://trendshift.io/api/badge/repositories/31007" alt="dograh-hq%2Fdograh | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </p>
 
@@ -124,18 +130,46 @@ curl -o docker-compose.yaml https://raw.githubusercontent.com/dograh-hq/dograh/m
 
 ## CALMOS / Sakinah Scenario Console
 
-CALMOS Connect v1.45.6 includes the Sakinah Scenario Console at `/sakinah` and
+CALMOS Connect v1.47.0.27 includes the Sakinah Scenario Console at `/sakinah` and
 its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
 
 - Durable Agent Runs/Call History records for active and completed calls,
   including transcripts, utterances, scores, events, latency, and provider
   metadata.
+- Live Sakinah calls and browser tests expose turn-by-turn CALM scoring,
+  engineered prompt context, trend direction, and downloadable JSON; the same
+  scoring payload is persisted incrementally in Postgres and MinIO, with AWS S3
+  replication. Enable `calm_scoring.enabled` in the agent's General settings;
+  new browser and inbound calls read this setting when they start.
+  Each run detail page shows readable, alternating turn cards and four graphs
+  covering caller/Sakinah emotional and safety dimensions.
 - Private recording and transcript storage with server-generated, short-lived
   playback/download links. Local Docker uses MinIO; production deployments can
   use encrypted AWS S3 without exposing credentials or public object URLs.
 - A privacy-controlled Sakinah memory layer backed by PostgreSQL pgvector,
   stable service-user identities, provenance, retention, and caller states
-  (`UNKNOWN`, `FIRST_TIME`, `RECOGNISED`, and `VERIFIED`).
+  (`UNKNOWN`, `FIRST_TIME`, `RECOGNISED`, `PIN_REQUIRED`, `VERIFIED`,
+  `CONTINUITY_DECLINED`, and `CONTINUITY_AUTHORISED`).
+- Memory extraction now accepts the configured Sakinah workflows through
+  `MEMORY_WORKFLOW_NAMES`. With `MEMORY_REQUIRE_EXPLICIT_CONSENT=false` (the
+  default), saving remains automatic unless the caller explicitly opts out;
+  consent answers are recorded as privacy permissions. This release saves
+  memories for future use but does not load them into calls pending PIN
+  verification. v1.47.0.27 adds DTMF-only PIN enrollment/verification, temporary
+  lockout protection, a separate Continue / Start Fresh choice, last-two-call
+  retrieval, bounded continuity context, and longitudinal memory reconciliation.
+  Run Details reports each run's S3 backup as copying, successful, or failed
+  based on its artifact replication records.
+- The continuity lifecycle is: first call → memory consent → post-call memory
+  write → optional DTMF PIN enrollment; return call → possible caller
+  recognition → backend PIN verification → Continue / Start Fresh → authorised
+  bounded recall only for Continue. Telephone-number recognition alone never
+  authorises historic disclosure.
+- Configure PIN functionality with `SAKINAH_PIN_ENABLED` (default `true`),
+  `SAKINAH_PIN_LENGTH` (default `4`), `SAKINAH_PIN_MAX_ATTEMPTS` (default `5`),
+  and `SAKINAH_PIN_LOCKOUT_SECONDS` (default `900`). Run the Alembic migration
+  before starting v1.47.0.27. PINs are never stored in plaintext or placed in
+  workflow context, transcripts, recordings, logs, or object storage.
 - Scenario Library search across names, descriptions, categories, tags,
   identifiers, and relevant scenario text, with filtering performed server-side
   for database-backed libraries.
@@ -144,6 +178,14 @@ Both consoles show durable run history with conversation previews and signed
 download controls for available recordings and transcripts. Call persistence
 and memory extraction are asynchronous so long-term storage is not on the
 real-time audio → STT → LLM → TTS response path.
+
+The agent editor's visible **Export Definition** button downloads a ZIP containing
+`workflow_definition.json` in the same `{name, workflow_definition}` shape accepted
+by the [Create from Definition API](https://docs.dograh.com/api-reference/agents/create-from-definition),
+plus a manifest with node and edge counts. The export is taken from React Flow's
+full graph object, preserving disconnected/global nodes, connections, node data,
+and layout positions. Sakinah startup configuration failures now return an
+actionable message instead of an opaque Internal Server Error.
 
 Administrators can open `/sakinah/scenarios` to bulk-import scenario JSON files
 from a ZIP or from multiple individual files. The importer validates every JSON
@@ -203,9 +245,9 @@ you intend to erase local call records and recordings.
 ### Self-Hosted Deployment
 
 For detailed deployment instructions including remote server setup with HTTPS, see our [Docker Deployment Guide](https://docs.dograh.com/deployment/docker#option-2-remote-server-deployment).
-For the CALMOS Connect v1.45.6 data model, AWS storage configuration, memory
+For the CALMOS Connect v1.46.0.4.2.D data model, AWS storage configuration, memory
 privacy flow, replay flow, migrations, and rollback procedure, see
-[`docs/developer/calmos-connect-v1.45.6.mdx`](docs/developer/calmos-connect-v1.45.6.mdx).
+[`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
 
 ### Cloud Version
 
@@ -228,7 +270,7 @@ You can go to [https://docs.dograh.com](https://docs.dograh.com/) for our docume
 - **GitHub Discussions** — share use cases, ask questions, swap workflow recipes.
 - **GitHub Issues** — report bugs or request features.
 
-👉 Join us → [Dograh Community Slack](https://join.slack.com/t/dograh-community/shared_invite/zt-3zjb5vwvl-j7hRz3_F1SOn5cH~jm5f5g)
+👉 Join us → [Dograh Community Slack](https://join.slack.com/t/dograh-community/shared_invite/zt-4787daqcn-3TDiQUh~3xrr3pwAqR9wpQ)
 
 ## 🙌 Contributing
 
@@ -260,5 +302,62 @@ Founded by YC alumni and exit founders committed to keeping voice AI open and ac
   <p align="center">
     <a href="https://github.com/dograh-hq/dograh">⭐ Star us on GitHub</a> |
     <a href="https://app.dograh.com">☁️ Try Cloud Version</a> |
-    <a href="https://join.slack.com/t/dograh-community/shared_invite/zt-3zjb5vwvl-j7hRz3_F1SOn5cH~jm5f5g">💬 Join Slack</a>
+    <a href="https://join.slack.com/t/dograh-community/shared_invite/zt-4787daqcn-3TDiQUh~3xrr3pwAqR9wpQ">💬 Join Slack</a>
   </p>
+
+
+### v1.47.0.24 scoring persistence and Humain
+
+This release builds on `codex/v1.47.0.23-calm-s3` (71e91d14) and keeps its
+scoring toggle, live graphs, call routing, recording and transcript behavior.
+
+CALM saves caller and Sakinah scores after each turn and evaluator update.
+Finalization waits for evaluation and flushes the final snapshot. MinIO keeps
+`calm-scoring/YYYY/MM/<service-user>/<call>/turn-by-turn.json` for existing readers.
+Each revision also stores `turn-by-turn.json`, `scoring-table.json` and
+`prompt-engineering.json` under `revisions/<snapshot-sha256>/`. The scoring table
+includes both roles and full evaluation data. Prompt data includes CALM prompts,
+message context, response strategy and delivered responses. Immutable revision
+keys prevent queued AWS copies from reading a newer turn with an older checksum.
+Run metadata identifies the latest revision. Upload failures remain isolated
+from calls and are reported as failed/partial, never as successful writes.
+
+AWS copies use the existing ARQ replication worker and reconciliation job.
+Configure `ENABLE_AWS_S3_SECONDARY=true`, `AWS_RECORDINGS_BUCKET`, `AWS_REGION`
+and optional `AWS_S3_PREFIX`, with MinIO as primary. The worker needs AWS bucket
+permissions. Disabled or unconfigured AWS storage is reported explicitly.
+
+Scenario Library now offers **Download all scenarios as ZIP**. It fetches the
+whole current organization library, regardless of search, and exports one
+importable UTF-8 JSON file per scenario.
+
+Select **Humain Voice** for TTS or STT in BYOK model configuration. TTS uses
+`nebula`, 24 kHz mono PCM16 and a multilingual profile ID. Save the provider
+configuration, then load the voice catalog or enter the issued profile ID.
+STT streams 16 kHz PCM16 and supports `ar`, `en` and `codeswitch`. Telephone
+8 kHz input is resampled. The backend uses `humain-voice==0.18.0`, bounded
+requests and owned client cleanup. API keys never go to the browser.
+The standard endpoint is `https://api.voice.humain.com` with `/socket.io`.
+Legacy issued `sautech.humain.com` deployments require `/realtime/socket.io`.
+
+Select **Humain IQ (ALLAM 34B)** for an issued OpenAI-compatible IQ deployment.
+Enter the exact base URL and model ID from your IQ account, including the
+ALLAM 34B deployment ID when provisioned. Neither an IQ endpoint nor a model
+slug is guessed. This adapter supports streaming chat and existing evaluation
+inference through the same LLM factory. Account access, protocol compatibility
+and live ALLAM availability must be verified with the issued IQ contract.
+
+Voice implementation references:
+- https://docs.voice.humain.com/en/sdk/python
+- https://docs.voice.humain.com/en/models
+- https://www.humain.com/iq
+
+Local validation for v1.47.0.24: 61 selected backend tests, 142 UI tests,
+18 display-option cases and `npx tsc --noEmit` passed. Tests cover artifacts,
+replication, scoring, model configuration, Humain adapters and ZIP round-trip.
+The unmodified v1.47.0.23 baseline reproduced nine UI and two storage-audit
+fixture failures; this release updates only their missing CALM fixture fields.
+Backend checks used Python 3.12 in this workspace; production remains Python
+3.13 as declared by the project. Live Humain/IQ calls, audible browser calls,
+and writes to deployed MinIO/AWS were not exercised without issued credentials
+and running infrastructure. No deployment or main-branch merge is included.

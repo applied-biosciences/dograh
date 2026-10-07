@@ -15,6 +15,7 @@
 services:
   postgres:
     image: pgvector/pgvector:pg17
+    platform: linux/amd64
     environment:
       POSTGRES_USER: postgres
       # Sourced from .env. Defaults to "postgres"
@@ -42,6 +43,7 @@ services:
 
   redis:
     image: redis:7
+    platform: linux/amd64
     ports:
       - "6379:6379"
     command: >
@@ -58,6 +60,7 @@ services:
 
   minio:
     image: minio/minio
+    platform: linux/amd64
     container_name: minio
     command: server /data --console-address ":9001"
     environment:
@@ -79,6 +82,7 @@ services:
 
   dograh-init:
     image: bash:5.2
+    platform: linux/amd64
     container_name: dograh_init
     profiles: ["remote", "local-turn"]
     environment:
@@ -90,6 +94,8 @@ services:
       MINIO_PUBLIC_ENDPOINT: "${MINIO_PUBLIC_ENDPOINT:-http://localhost:9000}"
       TURN_HOST: "${TURN_HOST:-}"
       TURN_SECRET: "${TURN_SECRET:-}"
+      TURN_MIN_PORT: "${TURN_MIN_PORT:-49152}"
+      TURN_MAX_PORT: "${TURN_MAX_PORT:-49200}"
       # Keep at 1: Sakinah simulations hold in-process state, and the
       # events/audio WebSockets 404 when they land on a different worker
       # (https://github.com/applied-biosciences/dograh/issues/4).
@@ -105,6 +111,7 @@ services:
 
   nginx:
     image: nginx:alpine
+    platform: linux/amd64
     container_name: nginx_https
     profiles: ["remote"]
     depends_on:
@@ -123,6 +130,7 @@ services:
 
   coturn:
     image: coturn/coturn:4.8.0
+    platform: linux/amd64
     container_name: coturn
     restart: unless-stopped
     profiles: ["remote", "local-turn"]
@@ -134,7 +142,7 @@ services:
       - "3478:3478/tcp"
       - "5349:5349/udp"
       - "5349:5349/tcp"
-      - "49152-49200:49152-49200/udp"
+      - "${TURN_MIN_PORT:-49152}-${TURN_MAX_PORT:-49200}:${TURN_MIN_PORT:-49152}-${TURN_MAX_PORT:-49200}/udp"
     volumes:
       - coturn-generated:/etc/coturn:ro
     command:
@@ -144,7 +152,8 @@ services:
       - app-network
 
   api:
-    image: ${REGISTRY:-dograhai}/dograh-api:latest
+    image: ${REGISTRY:-dograhai}/dograh-api:${DOGRAH_VERSION:-latest}
+    platform: linux/amd64
     environment:
       # Core application config
       ENVIRONMENT: "${ENVIRONMENT:-local}"
@@ -173,22 +182,20 @@ services:
       # Redis configuration. Keep the bundled Redis default unless overridden.
       REDIS_URL: "${REDIS_URL:-redis://:${REDIS_PASSWORD:-redissecret}@redis:6379}"
 
-      # Storage configuration - bundled MinIO by default. Set ENABLE_AWS_S3=true
-      # in .env to make the API use AWS S3 or another S3-compatible server.
-      ENABLE_AWS_S3: "${ENABLE_AWS_S3:-false}"
+      # MinIO remains the primary artifact store. S3 is an asynchronous
+      # secondary copy unless an operator deliberately opts into a sole S3
+      # primary with ENABLE_AWS_S3_PRIMARY=true.
+      ENABLE_AWS_S3_PRIMARY: "${ENABLE_AWS_S3_PRIMARY:-false}"
+      ENABLE_AWS_S3_SECONDARY: "${ENABLE_AWS_S3_SECONDARY:-false}"
 
-      # S3 backend configuration. Compose's .env file is used for interpolation,
-      # but those values are not automatically injected into containers, so pass
-      # the S3 settings through explicitly.
-      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
-      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
-      AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN:-}"
+      # AWS credentials come from the instance/task IAM role. Do not place
+      # long-lived access keys in the production Compose .env file.
       AWS_REGION: "${AWS_REGION:-eu-west-2}"
       AWS_RECORDINGS_BUCKET: "${AWS_RECORDINGS_BUCKET:-}"
       S3_BUCKET: "${S3_BUCKET:-}"
       S3_REGION: "${S3_REGION:-eu-west-2}"
       S3_KMS_KEY_ID: "${S3_KMS_KEY_ID:-}"
-      S3_SERVER_SIDE_ENCRYPTION: "${S3_SERVER_SIDE_ENCRYPTION:-aws:kms}"
+      S3_SERVER_SIDE_ENCRYPTION: "${S3_SERVER_SIDE_ENCRYPTION:-}"
 
       # For a non-AWS S3-compatible server, also set these in Compose's .env
       # S3_ENDPOINT_URL        e.g. https://s3.example.com
@@ -200,9 +207,16 @@ services:
       S3_ADDRESSING_STYLE: "${S3_ADDRESSING_STYLE:-}"
 
       MEMORY_ENABLED: "${MEMORY_ENABLED:-true}"
+      MEMORY_WORKFLOW_NAMES: "${MEMORY_WORKFLOW_NAMES:-Sakinah Scenario Console}"
+      MEMORY_REQUIRE_EXPLICIT_CONSENT: "${MEMORY_REQUIRE_EXPLICIT_CONSENT:-false}"
+      SAKINAH_PIN_ENABLED: "${SAKINAH_PIN_ENABLED:-true}"
+      SAKINAH_PIN_LENGTH: "${SAKINAH_PIN_LENGTH:-4}"
+      SAKINAH_PIN_MAX_ATTEMPTS: "${SAKINAH_PIN_MAX_ATTEMPTS:-5}"
+      SAKINAH_PIN_LOCKOUT_SECONDS: "${SAKINAH_PIN_LOCKOUT_SECONDS:-900}"
       MEMORY_EMBEDDING_MODEL: "${MEMORY_EMBEDDING_MODEL:-text-embedding-3-small}"
       MEMORY_MAX_RESULTS: "${MEMORY_MAX_RESULTS:-5}"
       MEMORY_MIN_SIMILARITY: "${MEMORY_MIN_SIMILARITY:-0.72}"
+      CALLER_IDENTIFIER_HASH_KEY: "${CALLER_IDENTIFIER_HASH_KEY:-}"
       RECORD_CALLS: "${RECORD_CALLS:-true}"
 
       # MinIO
@@ -214,7 +228,9 @@ services:
       MINIO_ACCESS_KEY: "${MINIO_ROOT_USER:-minioadmin}"
       MINIO_SECRET_KEY: "${MINIO_ROOT_PASSWORD:-minioadmin}"
       MINIO_BUCKET: "voice-audio"
+      MINIO_REGION: "${MINIO_REGION:-us-east-1}"
       MINIO_SECURE: "false"
+      MINIO_ALLOW_ANONYMOUS: "${MINIO_ALLOW_ANONYMOUS:-false}"
 
       # Number of uvicorn worker processes (each is its own process bound to a
       # distinct port starting at 8000). dograh-init renders nginx upstreams
@@ -248,6 +264,11 @@ services:
       # LANGFUSE_PUBLIC_KEY: ""
       # LANGFUSE_HOST: ""
       # LANGFUSE_PROJECT_ID: ""
+      # Traces are private by default. Set to "true" to make traces in the
+      # project above readable by anyone holding the trace URL, with no
+      # Langfuse login. Organizations that connected their own Langfuse project
+      # in the UI carry their own visibility setting instead.
+      LANGFUSE_TRACES_PUBLIC: "${LANGFUSE_TRACES_PUBLIC:-false}"
 
       # TURN server configuration (for WebRTC NAT traversal in remote server)
       # Uses time-limited credentials via TURN REST API (HMAC-SHA1).
@@ -296,7 +317,8 @@ services:
       - app-network
 
   ui:
-    image: ${REGISTRY:-dograhai}/dograh-ui:latest
+    image: ${REGISTRY:-dograhai}/dograh-ui:${DOGRAH_VERSION:-latest}
+    platform: linux/amd64
     environment:
       # Bind the Next.js standalone server to all interfaces
       HOSTNAME: "0.0.0.0"
@@ -341,6 +363,7 @@ services:
   #     (api/utils/tunnel.py). Convenient for local dev.
   cloudflared:
     image: cloudflare/cloudflared:latest
+    platform: linux/amd64
     container_name: cloudflared-tunnel
     profiles: ["tunnel"]
     restart: unless-stopped
