@@ -34,6 +34,7 @@ class S3ObjectStore:
         self.region = settings.s3_region
         self.endpoint_url = settings.s3_endpoint_url
         self.expiry = settings.presign_expiry_seconds
+        self.key_prefix = settings.s3_key_prefix
         # Supplying credentials is only for a configured S3-compatible local
         # store such as MinIO. With normal AWS settings both values are None,
         # which leaves boto3/aioboto3 on its default role/profile/SSO chain.
@@ -56,10 +57,17 @@ class S3ObjectStore:
             raise ObjectNotAvailable("Object storage is not configured")
         return self.bucket
 
+    def _object_key(self, key: str) -> str:
+        """Map a logical Dograh object key onto its configured S3 prefix."""
+        normalized = key.lstrip("/")
+        if not self.key_prefix or normalized.startswith(f"{self.key_prefix}/"):
+            return normalized
+        return f"{self.key_prefix}/{normalized}"
+
     async def metadata(self, key: str) -> ObjectMetadata:
         try:
             async with self.session.client("s3", **self._client_kwargs()) as client:
-                result = await client.head_object(Bucket=self._require_bucket(), Key=key)
+                result = await client.head_object(Bucket=self._require_bucket(), Key=self._object_key(key))
             return ObjectMetadata(result.get("ContentType"), result.get("ContentLength"))
         except (BotoCoreError, ClientError) as exc:
             raise ObjectNotAvailable("Associated object is unavailable") from exc
@@ -67,11 +75,16 @@ class S3ObjectStore:
     async def presigned_download(self, key: str, filename: str, *, inline: bool) -> str:
         try:
             async with self.session.client("s3", **self._client_kwargs()) as client:
+                # A signature can be generated for any arbitrary key. Check
+                # first so callers never receive a plausible-looking URL for
+                # a stale primary-store reference that was not replicated.
+                object_key = self._object_key(key)
+                await client.head_object(Bucket=self._require_bucket(), Key=object_key)
                 return await client.generate_presigned_url(
                     "get_object",
                     Params={
                         "Bucket": self._require_bucket(),
-                        "Key": key,
+                        "Key": object_key,
                         "ResponseContentDisposition": f'{"inline" if inline else "attachment"}; filename="{safe_filename(filename)}"',
                     },
                     ExpiresIn=self.expiry,
@@ -82,7 +95,7 @@ class S3ObjectStore:
     async def bytes(self, key: str, max_bytes: int) -> bytes:
         try:
             async with self.session.client("s3", **self._client_kwargs()) as client:
-                response = await client.get_object(Bucket=self._require_bucket(), Key=key)
+                response = await client.get_object(Bucket=self._require_bucket(), Key=self._object_key(key))
                 size = response.get("ContentLength")
                 if size is not None and size > max_bytes:
                     raise ObjectNotAvailable("Object exceeds package size limit")

@@ -10,7 +10,7 @@ import pytest
 from data_explorer.audit import FileAuditSink
 from data_explorer.config import Settings
 from data_explorer.main import build_call_export, create_app
-from data_explorer.storage import ObjectNotAvailable, safe_filename
+from data_explorer.storage import ObjectNotAvailable, S3ObjectStore, safe_filename
 
 
 CALL = {
@@ -46,6 +46,11 @@ class FakeStore:
         return b"audio bytes"
 
 
+class MissingObjectStore(FakeStore):
+    async def presigned_download(self, key, filename, *, inline):
+        raise ObjectNotAvailable()
+
+
 @pytest.fixture
 def app(tmp_path):
     settings = Settings("postgresql+asyncpg://readonly@example.invalid/calmos", "test-admin-token", False, str(tmp_path / "audit.jsonl"), "bucket", "eu-west-2", None, None, None, 300, 1024 * 1024)
@@ -60,6 +65,24 @@ async def client(app):
 
 
 def auth(): return {"Authorization": "Bearer test-admin-token"}
+
+
+def test_aws_bucket_does_not_inherit_minio_configuration(monkeypatch):
+    monkeypatch.setenv("DATA_EXPLORER_DATABASE_READONLY_URL", "postgresql+asyncpg://readonly@example.invalid/calmos")
+    monkeypatch.setenv("DATA_EXPLORER_ADMIN_TOKEN", "test-admin-token")
+    monkeypatch.setenv("DATA_EXPLORER_S3_BUCKET", "calmos-connect-recordings-prod")
+    monkeypatch.setenv("DATA_EXPLORER_S3_PREFIX", "aws/")
+    monkeypatch.setenv("MINIO_ENDPOINT", "http://minio:9000")
+    monkeypatch.setenv("MINIO_ACCESS_KEY", "local-minio-user")
+    monkeypatch.setenv("MINIO_SECRET_KEY", "local-minio-secret")
+    settings = Settings.from_environment()
+    assert settings.s3_bucket == "calmos-connect-recordings-prod"
+    assert settings.s3_endpoint_url is None
+    assert settings.object_store_access_key is None
+    assert settings.object_store_secret_key is None
+    assert settings.s3_key_prefix == "aws"
+    assert S3ObjectStore(settings)._object_key("recordings/call.wav") == "aws/recordings/call.wav"
+    assert S3ObjectStore(settings)._object_key("aws/recordings/call.wav") == "aws/recordings/call.wav"
 
 
 @pytest.mark.asyncio
@@ -102,6 +125,16 @@ async def test_export_schema_files_and_presigned_audio(client):
     package = await client.get("/api/calls/call-19/package", headers=auth())
     with ZipFile(io.BytesIO(package.content)) as archive:
         assert {"call.json", "memory.json", "transcript.txt", "files/mixed.wav"}.issubset(archive.namelist())
+
+
+@pytest.mark.asyncio
+async def test_missing_object_does_not_return_a_signed_url(tmp_path):
+    settings = Settings("postgresql+asyncpg://readonly@example.invalid/calmos", "test-admin-token", False, str(tmp_path / "audit.jsonl"), "bucket", "eu-west-2", None, None, None, 300, 1024 * 1024)
+    app = create_app(settings, FakeRepository(), MissingObjectStore(), FileAuditSink(settings.audit_log_path))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as isolated_client:
+        response = await isolated_client.get("/api/calls/call-19/files/recording:r1/download?return_url=true", headers=auth())
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
