@@ -125,6 +125,12 @@ def _safe_proposal(value: Any) -> dict[str, Any] | None:
     memory_type = str(value.get("memory_type") or value.get("type") or "").strip()
     if not text or len(text) > 2_000 or memory_type not in MEMORY_TYPES:
         return None
+    # Safety/clinical categories require explicit caller-stated provenance;
+    # model inference alone is not a longitudinal fact.
+    if memory_type in {"risk_factor", "clinical_context"} and value.get(
+        "caller_stated"
+    ) is not True:
+        return None
     sensitivity = str(value.get("sensitivity") or "normal").lower()
     if sensitivity not in SENSITIVITIES:
         sensitivity = "normal"
@@ -154,6 +160,10 @@ def _safe_proposal(value: Any) -> dict[str, Any] | None:
     return {
         "memory_text": text,
         "memory_type": memory_type,
+        "fact_key": (
+            str(value.get("fact_key") or "").strip().lower()[:128] or None
+        ),
+        "fact_category": str(value.get("fact_category") or memory_type).strip()[:64],
         "importance": importance,
         "confidence": confidence,
         "sensitivity": sensitivity,
@@ -268,10 +278,15 @@ async def extract_and_store_memories(workflow_run_id: int) -> int:
         "Extract only useful, likely-long-term continuity facts from the transcript. "
         "Do not extract every utterance, greetings, transient small talk, or "
         "unsupported inference. "
+        "Do not persist inferred diagnoses, protected characteristics, identity, "
+        "criminality, medication, risk status, suicidality, psychosis, abuse, or "
+        "safeguarding conclusions. Risk/clinical categories require the caller_stated "
+        "field to be true and must reflect explicit caller words. "
         "If the caller explicitly asks not to be remembered, set "
         "memory_storage_allowed to false. "
         'Return JSON only: {"memory_storage_allowed":boolean,"memories":['
-        '{"memory_text":string,"memory_type":string,'
+            '{"memory_text":string,"memory_type":string,'
+            '"fact_key":string|null,"fact_category":string|null,"caller_stated":boolean,'
         '"importance":number,"confidence":number,"sensitivity":"low"|"normal"|"high"|"restricted",'
         '"source_utterance_sequence":number|null,"expires_days":number|null,'
         '"verbal_reference_allowed":boolean,"explicit_detail_allowed":boolean}]} .'

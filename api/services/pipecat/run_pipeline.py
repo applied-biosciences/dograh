@@ -23,6 +23,16 @@ from api.services.integrations import (
     create_runtime_sessions,
 )
 from api.services.memory.orchestrator import prepare_memory_context
+from api.services.sakinah.continuity import (
+    is_continuity_workflow,
+    prepare_sakinah_identity,
+)
+from api.services.sakinah.pin_runtime import (
+    SakinahIdentityOutputObserver,
+    SakinahIdentityRuntime,
+    SakinahIdentityUserObserver,
+    SakinahSecureInputProcessor,
+)
 from api.services.observability.active_calls import (
     register_active_call as register_worker_active_call,
 )
@@ -659,10 +669,46 @@ async def _run_pipeline_impl(
     else:
         user_config = resolved_user_config
 
-    # Resolve Sakinah continuity before the first conversational turn. The
-    # orchestrator is privacy-bounded and timeout-protected; persistence must
-    # never prevent a live call from connecting.
-    if workflow.name != "Sakinah Scenario Console":
+    # Resolve caller state before the first conversational turn. Telephone
+    # recognition is only a candidate; the Sakinah continuity workflow adds a
+    # deterministic PIN gate and never loads history here.
+    sakinah_identity_context = None
+    if is_continuity_workflow(workflow.name):
+        try:
+            sakinah_identity_context = await asyncio.wait_for(
+                prepare_sakinah_identity(
+                    organization_id=workflow.organization_id,
+                    call_context=merged_call_context_vars,
+                ),
+                timeout=2.0,
+            )
+        except Exception:
+            logger.warning("Sakinah identity unavailable; continuing without history")
+            sakinah_identity_context = await prepare_sakinah_identity(
+                organization_id=None,
+                call_context={},
+            )
+        merged_call_context_vars.update(
+            {
+                key: value
+                for key, value in sakinah_identity_context.items()
+                if key != "service_user_id" or value is not None
+            }
+        )
+        if sakinah_identity_context.get("service_user_id"):
+            try:
+                await db_client.update_workflow_run(
+                    workflow_run_id,
+                    service_user_id=sakinah_identity_context["service_user_id"],
+                    caller_identifier_id=sakinah_identity_context["caller_identifier_id"],
+                    caller_state=sakinah_identity_context["caller_status"],
+                )
+            except Exception:
+                logger.warning(
+                    "Unable to persist Sakinah service-user association for run {}",
+                    workflow_run_id,
+                )
+    elif workflow.name != "Sakinah Scenario Console":
         caller_identifier = (
             merged_call_context_vars.get("caller_identifier")
             or merged_call_context_vars.get("caller_number")
@@ -1058,6 +1104,25 @@ async def _run_pipeline_impl(
     engine.set_context(context)
     engine.set_audio_config(audio_config)
 
+    sakinah_identity_runtime = None
+    sakinah_secure_input = None
+    sakinah_user_observer = None
+    sakinah_output_observer = None
+    if (
+        is_continuity_workflow(workflow.name)
+        and sakinah_identity_context
+        and sakinah_identity_context.get("service_user_id")
+        and workflow.organization_id
+    ):
+        sakinah_identity_runtime = SakinahIdentityRuntime(
+            engine=engine,
+            organization_id=workflow.organization_id,
+            identity=sakinah_identity_context,
+        )
+        sakinah_secure_input = SakinahSecureInputProcessor(sakinah_identity_runtime)
+        sakinah_user_observer = SakinahIdentityUserObserver(sakinah_identity_runtime)
+        sakinah_output_observer = SakinahIdentityOutputObserver(sakinah_identity_runtime)
+
     assistant_params = LLMAssistantAggregatorParams(
         correct_aggregation_callback=engine.create_aggregation_correction_callback(),
     )
@@ -1248,6 +1313,9 @@ async def _run_pipeline_impl(
             termination_funnel,
             voicemail_detector=voicemail_detector,
             calm_prompt_processor=calm_prompt_processor,
+            sakinah_secure_input=sakinah_secure_input,
+            sakinah_user_observer=sakinah_user_observer,
+            sakinah_output_observer=sakinah_output_observer,
         )
     else:
         sakinah_avatar_capture = create_sakinah_avatar_capture(workflow_run_id)
@@ -1266,6 +1334,9 @@ async def _run_pipeline_impl(
             recording_router=recording_router,
             calm_prompt_processor=calm_prompt_processor,
             sakinah_avatar_capture=sakinah_avatar_capture,
+            sakinah_secure_input=sakinah_secure_input,
+            sakinah_user_observer=sakinah_user_observer,
+            sakinah_output_observer=sakinah_output_observer,
         )
 
     # Create pipeline task with audio configuration

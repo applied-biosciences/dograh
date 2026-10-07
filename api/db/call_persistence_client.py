@@ -445,6 +445,28 @@ class CallPersistenceClient(BaseDBClient):
                 return service_user.memory_enabled and not MEMORY_REQUIRE_EXPLICIT_CONSENT
             return permission.granted
 
+    async def get_latest_privacy_permission(
+        self, service_user_id: str, *, permission_type: str
+    ) -> PrivacyPermissionModel | None:
+        """Return the current permission event without collapsing refusal/no-event."""
+        now = datetime.now(UTC)
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(PrivacyPermissionModel)
+                .where(
+                    PrivacyPermissionModel.service_user_id == service_user_id,
+                    PrivacyPermissionModel.permission_type == permission_type,
+                    PrivacyPermissionModel.revoked_at.is_(None),
+                    or_(
+                        PrivacyPermissionModel.expires_at.is_(None),
+                        PrivacyPermissionModel.expires_at > now,
+                    ),
+                )
+                .order_by(PrivacyPermissionModel.created_at.desc())
+                .limit(1)
+            )
+            return result.scalars().first()
+
     async def record_privacy_permission(
         self,
         *,
@@ -589,6 +611,7 @@ class CallPersistenceClient(BaseDBClient):
             query = select(MemoryModel).where(
                 MemoryModel.service_user_id == service_user_id,
                 MemoryModel.active.is_(True),
+                MemoryModel.status.in_(("active", "new", "confirmed", "updated")),
                 MemoryModel.internal_context_allowed.is_(True),
                 or_(MemoryModel.expires_at.is_(None), MemoryModel.expires_at > now),
             )
@@ -627,6 +650,7 @@ class CallPersistenceClient(BaseDBClient):
         return {
             "id": memory.id,
             "memory_type": memory.memory_type,
+            "fact_key": memory.fact_key,
             "memory_text": memory.memory_text,
             "importance": memory.importance,
             "confidence": memory.confidence,
@@ -636,26 +660,41 @@ class CallPersistenceClient(BaseDBClient):
             "explicit_detail_allowed": memory.explicit_detail_allowed,
             "created_at": memory.created_at.isoformat() if memory.created_at else None,
             "expires_at": memory.expires_at.isoformat() if memory.expires_at else None,
+            "status": memory.status,
+            "source_count": memory.source_count,
             "similarity": similarity,
         }
 
     async def create_or_confirm_memory(self, values: dict[str, Any]) -> MemoryModel:
         async with self.async_session() as session:
-            existing_result = await session.execute(
-                select(MemoryModel).where(
-                    MemoryModel.service_user_id == values["service_user_id"],
-                    MemoryModel.memory_type == values["memory_type"],
-                    MemoryModel.memory_text == values["memory_text"],
-                    MemoryModel.active.is_(True),
-                )
-            )
+            fact_key = str(values.get("fact_key") or "").strip().lower() or None
+            lookup = [
+                MemoryModel.service_user_id == values["service_user_id"],
+                MemoryModel.memory_type == values["memory_type"],
+                MemoryModel.active.is_(True),
+                MemoryModel.status.in_(("active", "new", "confirmed", "updated")),
+            ]
+            if fact_key:
+                lookup.append(MemoryModel.fact_key == fact_key)
+            else:
+                lookup.append(MemoryModel.memory_text == values["memory_text"])
+            existing_result = await session.execute(select(MemoryModel).where(*lookup))
             item = existing_result.scalars().first()
             now = datetime.now(UTC)
+            if item is not None and item.memory_text != values["memory_text"]:
+                # A stable fact key with changed text is a new active revision;
+                # retain the old row and its provenance for audit history.
+                previous = item
+                item = None
+            else:
+                previous = None
             if item is None:
                 item = MemoryModel(
                     id=values.get("id") or str(uuid.uuid4()),
                     service_user_id=values["service_user_id"],
                     memory_type=values["memory_type"],
+                    fact_key=fact_key,
+                    fact_category=values.get("fact_category") or values["memory_type"],
                     memory_text=values["memory_text"],
                     embedding=values.get("embedding"),
                     importance=values.get("importance", 0.5),
@@ -672,12 +711,24 @@ class CallPersistenceClient(BaseDBClient):
                     explicit_detail_allowed=values.get(
                         "explicit_detail_allowed", False
                     ),
+                    first_observed_at=now,
                     last_confirmed_at=now,
+                    source_count=1,
+                    status="updated" if previous is not None else "new",
                     expires_at=values.get("expires_at"),
                 )
                 session.add(item)
+                await session.flush()
+                if previous is not None:
+                    previous.active = False
+                    previous.status = "superseded"
+                    previous.superseded_by = item.id
             else:
                 item.last_confirmed_at = now
+                item.status = "confirmed"
+                item.source_count = (item.source_count or 0) + 1
+                if fact_key and not item.fact_key:
+                    item.fact_key = fact_key
                 item.confidence = max(
                     item.confidence or 0, values.get("confidence", 0.5)
                 )

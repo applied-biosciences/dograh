@@ -146,7 +146,7 @@ async def test_unknown_caller_does_not_require_identity_lookup(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_first_time_caller_gets_one_time_explanation(monkeypatch):
+async def test_first_time_caller_gets_privacy_safe_greeting(monkeypatch):
     fake_db = _MemoryDB(created=True, memories=[])
     monkeypatch.setattr(orchestrator, "db_client", fake_db)
     monkeypatch.setattr(orchestrator, "MEMORY_ENABLED", True)
@@ -155,12 +155,12 @@ async def test_first_time_caller_gets_one_time_explanation(monkeypatch):
         call_context={"caller_number": "+441234"},
     )
     assert result["caller_status"] == "FIRST_TIME"
-    assert "remember useful information" in result["greeting_override"]
-    assert fake_db.marked == ["service-user-1"]
+    assert "remember useful information" not in result["greeting_override"]
+    assert fake_db.marked == []
 
 
 @pytest.mark.asyncio
-async def test_unverified_recognised_caller_cannot_receive_high_sensitivity_memory(
+async def test_recognised_caller_receives_no_history_before_secure_continuity_gate(
     monkeypatch,
 ):
     fake_db = _MemoryDB(
@@ -191,17 +191,14 @@ async def test_unverified_recognised_caller_cannot_receive_high_sensitivity_memo
         call_context={"caller_number": "+441234"},
     )
     assert result["caller_status"] == "RECOGNISED"
-    assert [item["memory_text"] for item in result["relevant_memories"]] == [
-        "Prefers mornings"
-    ]
+    assert result["relevant_memories"] == []
     assert "Highly sensitive historic detail" not in result["prompt_context"]
-    assert "Hello, Alex. Welcome back." in result["greeting_override"]
-    assert "Preferred name for conversational use: Alex" in result["prompt_context"]
-    assert result["relevant_memories"][0]["may_verbalize"] is False
+    assert "Welcome back" not in result["greeting_override"]
+    assert "Alex" not in result["prompt_context"]
 
 
 @pytest.mark.asyncio
-async def test_stored_verified_identifier_enables_explicitly_permitted_memory(
+async def test_stored_verified_identifier_does_not_bypass_pin_and_continue_gate(
     monkeypatch,
 ):
     fake_db = _MemoryDB(
@@ -224,10 +221,10 @@ async def test_stored_verified_identifier_enables_explicitly_permitted_memory(
         organization_id=1,
         call_context={"caller_number": "+441234"},
     )
-    assert result["caller_status"] == "VERIFIED"
-    assert result["memory_authorisation_level"] == "verified"
-    assert result["relevant_memories"][0]["may_verbalize"] is True
-    assert "Hello, Alex" in result["greeting_override"]
+    assert result["caller_status"] == "RECOGNISED"
+    assert result["memory_authorisation_level"] == "none"
+    assert result["relevant_memories"] == []
+    assert "Alex" not in result["greeting_override"]
 
 
 @pytest.mark.asyncio
@@ -243,7 +240,7 @@ async def test_memory_permission_denial_returns_no_context(monkeypatch):
         organization_id=1,
         call_context={"caller_number": "+441234"},
     )
-    assert result["memory_authorisation_level"] == "disabled"
+    assert result["memory_authorisation_level"] == "none"
     assert result["memory_available"] is False
 
 

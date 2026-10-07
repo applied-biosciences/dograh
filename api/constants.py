@@ -171,6 +171,25 @@ MEMORY_REQUIRE_EXPLICIT_CONSENT = (
 )
 
 
+def _bounded_int_setting(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Read a bounded integer setting without allowing unsafe configuration."""
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return min(maximum, max(minimum, value))
+
+
+SAKINAH_PIN_ENABLED = os.getenv("SAKINAH_PIN_ENABLED", "true").lower() == "true"
+SAKINAH_PIN_LENGTH = _bounded_int_setting("SAKINAH_PIN_LENGTH", 4, 4, 12)
+SAKINAH_PIN_MAX_ATTEMPTS = _bounded_int_setting(
+    "SAKINAH_PIN_MAX_ATTEMPTS", 5, 1, 20
+)
+SAKINAH_PIN_LOCKOUT_SECONDS = _bounded_int_setting(
+    "SAKINAH_PIN_LOCKOUT_SECONDS", 900, 30, 86_400
+)
+
+
 def memory_workflow_allowed(name: str | None) -> bool:
     return " ".join((name or "").split()).lower() in MEMORY_WORKFLOW_NAMES
 

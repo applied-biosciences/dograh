@@ -593,10 +593,9 @@ class ARIConnection:
                 )
 
         elif event_type == "ChannelDtmfReceived":
-            digit = event.get("digit", "")
             logger.debug(
                 f"[ARI org={self.organization_id}] DTMF: "
-                f"channel={channel_id}, digit={digit}"
+                f"channel={channel_id}, received=true"
             )
 
         else:

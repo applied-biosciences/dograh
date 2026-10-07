@@ -11,6 +11,7 @@ from api.db.organization_configuration_client import OrganizationConfigurationCl
 from api.db.organization_usage_client import OrganizationUsageClient
 from api.db.reports_client import ReportsClient
 from api.db.sakinah_persistence_client import SakinahPersistenceClient
+from api.db.sakinah_identity_client import SakinahIdentityClient
 from api.db.telephony_configuration_client import TelephonyConfigurationClient
 from api.db.telephony_phone_number_client import TelephonyPhoneNumberClient
 from api.db.telephony_trunk_client import TelephonyTrunkClient
@@ -50,6 +51,7 @@ class DBClient(
     TelephonyTrunkClient,
     FolderClient,
     SakinahPersistenceClient,
+    SakinahIdentityClient,
     CallPersistenceClient,
 ):
     """
@@ -74,4 +76,5 @@ class DBClient(
     - ToolClient: handles tool operations for reusable HTTP API tools
     - KnowledgeBaseClient: handles knowledge base document and vector search operations
     - FolderClient: handles folder operations for grouping workflows (agents)
+    - SakinahIdentityClient: handles organization-scoped Sakinah PIN credentials
     """

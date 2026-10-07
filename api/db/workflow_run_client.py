@@ -10,6 +10,7 @@ from api.db.base_client import BaseDBClient
 from api.db.filters import apply_workflow_run_filters, get_workflow_run_order_clause
 from api.db.models import (
     ArtifactReplicationStatusModel,
+    CallUtteranceModel,
     OrganizationModel,
     UserModel,
     WorkflowDefinitionModel,
@@ -36,6 +37,45 @@ def append_unique_tags(existing_tags: object, new_tags: object) -> list:
 
 
 class WorkflowRunClient(BaseDBClient):
+    async def get_last_two_eligible_previous_calls(
+        self,
+        *,
+        organization_id: int,
+        service_user_id: str,
+        current_run_id: int,
+    ) -> list[WorkflowRunModel]:
+        """Return the two newest completed, non-empty calls for one identity."""
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(WorkflowRunModel)
+                .join(WorkflowModel, WorkflowModel.id == WorkflowRunModel.workflow_id)
+                .where(
+                    WorkflowRunModel.service_user_id == service_user_id,
+                    WorkflowRunModel.id != current_run_id,
+                    WorkflowRunModel.is_completed.is_(True),
+                    WorkflowRunModel.started_at.is_not(None),
+                    WorkflowModel.organization_id == organization_id,
+                    or_(
+                        WorkflowRunModel.call_status.is_(None),
+                        WorkflowRunModel.call_status.notin_(
+                            ("failed", "error", "empty", "deleted")
+                        ),
+                    ),
+                    or_(
+                        func.length(func.trim(WorkflowRunModel.full_transcript)) > 0,
+                        select(CallUtteranceModel.id)
+                        .where(CallUtteranceModel.agent_run_id == WorkflowRunModel.id)
+                        .exists(),
+                    ),
+                )
+                .order_by(
+                    WorkflowRunModel.started_at.desc(),
+                    WorkflowRunModel.id.desc(),
+                )
+                .limit(2)
+            )
+            return list(result.scalars().all())
+
     async def get_artifact_replications_for_run(
         self, run_id: int, *, organization_id: int | None = None
     ) -> list[ArtifactReplicationStatusModel]:

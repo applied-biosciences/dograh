@@ -1,3 +1,24 @@
+# v1.47.0.27 (2026-10-07)
+
+- Complete the deferred Sakinah recall side from v1.47.0.26 with an
+  organization-scoped service-user PIN credential backend, bcrypt hashing,
+  DTMF-only enrollment and verification, and bounded brute-force lockout.
+- Add the deterministic returning-caller state machine with a strict
+  recognised-vs-verified distinction and a separate continue/start-fresh gate.
+  Caller ID alone never loads historic information.
+- Retrieve the two newest eligible previous completed calls and permitted active
+  durable memories only after verified CONTINUE, then expose a bounded private
+  continuity context rather than raw transcripts.
+- Add continuity summaries, fact-key-based memory confirmation/revision and
+  supersession provenance while preserving the v1.47.0.26 write path, consent,
+  opt-out, MinIO primary storage and optional S3 replication.
+- Consume PIN DTMF and PIN-entry audio before STT so PINs are excluded from
+  transcripts, utterances, gathered context, prompts, memory, webhook data and
+  normal application logs. Add focused PIN, DTMF, state-gate and continuity tests.
+- Add the `service_user_credentials` migration and Sakinah PIN environment
+  settings. See `docs/reports/v1.47.0.27-smoke-test-report.md`; staging smoke
+  testing and deployment credentials remain separate release work.
+
 # v1.47.0.26 (2026-10-07)
 
 - Start from the v1.47.0.25 implementation branch and preserve existing CALMOS

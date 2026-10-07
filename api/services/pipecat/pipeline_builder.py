@@ -41,6 +41,9 @@ def build_pipeline(
     recording_router=None,
     calm_prompt_processor=None,
     sakinah_avatar_capture=None,
+    sakinah_secure_input=None,
+    sakinah_user_observer=None,
+    sakinah_output_observer=None,
 ):
     """Build the main pipeline with all components.
 
@@ -62,6 +65,7 @@ def build_pipeline(
     processors = [
         transport.input(),  # Transport user input
         termination_funnel,
+        *([sakinah_secure_input] if sakinah_secure_input else []),
         AudioPathDiagnosticsProcessor(stage="input"),
         stt,
     ]
@@ -79,9 +83,13 @@ def build_pipeline(
 
     # Continue with the rest of the pipeline
     post_llm = [pipeline_engine_callback_processor]
+    if sakinah_output_observer:
+        post_llm.append(sakinah_output_observer)
     if recording_router:
         post_llm.append(recording_router)
 
+    if sakinah_user_observer:
+        processors.append(sakinah_user_observer)
     processors.append(user_context_aggregator)
 
     # Insert LLM gate before the main LLM when voicemail detection is enabled.
@@ -119,6 +127,9 @@ def build_realtime_pipeline(
     termination_funnel,
     voicemail_detector=None,
     calm_prompt_processor=None,
+    sakinah_secure_input=None,
+    sakinah_user_observer=None,
+    sakinah_output_observer=None,
 ):
     """Build a pipeline for realtime (speech-to-speech) LLM services.
 
@@ -148,15 +159,22 @@ def build_realtime_pipeline(
     processors = [
         transport.input(),
         termination_funnel,
+        *([sakinah_secure_input] if sakinah_secure_input else []),
         AudioPathDiagnosticsProcessor(stage="input"),
         user_context_aggregator,
         *([calm_prompt_processor] if calm_prompt_processor else []),
         realtime_llm,
     ]
 
+    if sakinah_user_observer:
+        processors.append(sakinah_user_observer)
+
     if voicemail_detector:
         logger.info("Adding native voicemail detector to realtime pipeline")
         processors.append(voicemail_detector.detector())
+
+    if sakinah_output_observer:
+        processors.append(sakinah_output_observer)
 
     processors.extend(
         [

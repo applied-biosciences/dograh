@@ -130,7 +130,7 @@ curl -o docker-compose.yaml https://raw.githubusercontent.com/dograh-hq/dograh/m
 
 ## CALMOS / Sakinah Scenario Console
 
-CALMOS Connect v1.47.0.26 includes the Sakinah Scenario Console at `/sakinah` and
+CALMOS Connect v1.47.0.27 includes the Sakinah Scenario Console at `/sakinah` and
 its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
 
 - Durable Agent Runs/Call History records for active and completed calls,
@@ -148,14 +148,28 @@ its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
   use encrypted AWS S3 without exposing credentials or public object URLs.
 - A privacy-controlled Sakinah memory layer backed by PostgreSQL pgvector,
   stable service-user identities, provenance, retention, and caller states
-  (`UNKNOWN`, `FIRST_TIME`, `RECOGNISED`, and `VERIFIED`).
+  (`UNKNOWN`, `FIRST_TIME`, `RECOGNISED`, `PIN_REQUIRED`, `VERIFIED`,
+  `CONTINUITY_DECLINED`, and `CONTINUITY_AUTHORISED`).
 - Memory extraction now accepts the configured Sakinah workflows through
   `MEMORY_WORKFLOW_NAMES`. With `MEMORY_REQUIRE_EXPLICIT_CONSENT=false` (the
   default), saving remains automatic unless the caller explicitly opts out;
   consent answers are recorded as privacy permissions. This release saves
   memories for future use but does not load them into calls pending PIN
-  verification. Run Details reports each run's S3 backup as copying, successful,
-  or failed based on its artifact replication records.
+  verification. v1.47.0.27 adds DTMF-only PIN enrollment/verification, temporary
+  lockout protection, a separate Continue / Start Fresh choice, last-two-call
+  retrieval, bounded continuity context, and longitudinal memory reconciliation.
+  Run Details reports each run's S3 backup as copying, successful, or failed
+  based on its artifact replication records.
+- The continuity lifecycle is: first call → memory consent → post-call memory
+  write → optional DTMF PIN enrollment; return call → possible caller
+  recognition → backend PIN verification → Continue / Start Fresh → authorised
+  bounded recall only for Continue. Telephone-number recognition alone never
+  authorises historic disclosure.
+- Configure PIN functionality with `SAKINAH_PIN_ENABLED` (default `true`),
+  `SAKINAH_PIN_LENGTH` (default `4`), `SAKINAH_PIN_MAX_ATTEMPTS` (default `5`),
+  and `SAKINAH_PIN_LOCKOUT_SECONDS` (default `900`). Run the Alembic migration
+  before starting v1.47.0.27. PINs are never stored in plaintext or placed in
+  workflow context, transcripts, recordings, logs, or object storage.
 - Scenario Library search across names, descriptions, categories, tags,
   identifiers, and relevant scenario text, with filtering performed server-side
   for database-backed libraries.

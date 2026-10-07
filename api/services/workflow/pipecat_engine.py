@@ -146,6 +146,11 @@ class PipecatEngine:
         self.context = context
         self.workflow = workflow
         self._call_context_vars = call_context_vars
+        # Continuity history is held separately from run-owned context. It is
+        # formatted into the private LLM system section only after the backend
+        # identity and continuity gates succeed, and is never persisted as
+        # initial_context/gathered_context by the call lifecycle.
+        self._private_prompt_context: dict[str, object] = {}
         self._workflow_run_id = workflow_run_id
         self._node_transition_callback = node_transition_callback
         self._run_transition_variable_extraction_in_background = (
@@ -318,8 +323,28 @@ class PipecatEngine:
 
     def _format_prompt(self, prompt: str) -> str:
         """Delegate prompt formatting to the shared workflow.utils implementation."""
+        return render_template(
+            prompt,
+            {**self._call_context_vars, **self._private_prompt_context},
+        )
 
-        return render_template(prompt, self._call_context_vars)
+    async def update_sakinah_security_state(
+        self,
+        values: Mapping[str, object],
+        *,
+        private_context: Mapping[str, object] | None = None,
+    ) -> None:
+        """Update only backend-issued safe state and refresh the current prompt."""
+        self._call_context_vars.update(values)
+        if private_context is not None:
+            self._private_prompt_context = dict(private_context)
+        if self._current_node is not None and self.llm is not None:
+            await self._setup_llm_context(self._current_node)
+
+    async def queue_sakinah_security_message(self, text: str) -> None:
+        """Speak a safe identity message without putting secrets in context."""
+        if self.task is not None and text:
+            await self.task.queue_frame(TTSSpeakFrame(text, append_to_context=True))
 
     async def _create_transition_func(
         self,
@@ -720,6 +745,15 @@ class PipecatEngine:
             format_prompt=self._format_prompt,
             has_recordings=self._has_recordings,
         )
+        continuity_prompt = self._private_prompt_context.get("continuity_context")
+        if (
+            self._call_context_vars.get("continuity_authorised") is True
+            and isinstance(continuity_prompt, str)
+            and continuity_prompt
+            and "{{memory_context}}" not in (getattr(node, "prompt", "") or "")
+            and "{{continuity_context}}" not in (getattr(node, "prompt", "") or "")
+        ):
+            system_prompt = f"{system_prompt}\n\n{continuity_prompt}"
         functions = await compose_functions_for_node(
             node=node,
             custom_tool_manager=self._custom_tool_manager,

@@ -34,11 +34,23 @@ _FALLBACK_ERROR_CLASSIFICATION = {
 _SENSITIVE_QUERY_VALUE = re.compile(
     r"([?&](?:token|access_token|authorization)=)[^&\s\"]+", re.IGNORECASE
 )
+_DTMF_VALUE = re.compile(
+    r"(?i)(['\"]?\b(?:digit|tone)\b['\"]?\s*[:=]\s*['\"]?)[0-9*#]+(['\"]?)"
+)
+_DTMF_EVENT_VALUE = re.compile(
+    r"(?i)(\bDTMF(?:\s+(?:received|event|tone))?\s*:\s*)[0-9*#]+"
+)
 
 
 def redact_access_log_message(message: str) -> str:
     """Remove bearer-like query parameters from proxied/access log messages."""
     return _SENSITIVE_QUERY_VALUE.sub(r"\1[REDACTED]", message)
+
+
+def redact_dtmf_log_message(message: str) -> str:
+    """Remove keypad values from provider/library log messages."""
+    redacted = _DTMF_VALUE.sub(r"\1[REDACTED]\2", message)
+    return _DTMF_EVENT_VALUE.sub(r"\1[REDACTED]", redacted)
 
 
 class InterceptHandler(logging.Handler):
@@ -56,7 +68,7 @@ class InterceptHandler(logging.Handler):
 
         # Use the original record's information instead of trying to find the caller
         # This preserves the logger name (e.g., "uvicorn.access") in the logs
-        message = redact_access_log_message(record.getMessage())
+        message = redact_dtmf_log_message(redact_access_log_message(record.getMessage()))
         loguru.logger.patch(lambda r: r.update(name=record.name)).opt(
             exception=record.exc_info
         ).log(level, message)
@@ -64,6 +76,8 @@ class InterceptHandler(logging.Handler):
 
 def enrich_log_record(record):
     """Inject run context and conservatively classify every ERROR record."""
+
+    record["message"] = redact_dtmf_log_message(record["message"])
 
     extra = record["extra"]
     extra["run_id"] = run_id_var.get()

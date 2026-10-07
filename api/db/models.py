@@ -273,6 +273,11 @@ class ServiceUserModel(Base):
         back_populates="service_user",
         cascade="all, delete-orphan",
     )
+    credentials = relationship(
+        "ServiceUserCredentialModel",
+        back_populates="service_user",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         UniqueConstraint(
@@ -345,6 +350,56 @@ class CallerIdentifierModel(Base):
         ),
         Index("ix_caller_identifiers_service_user_id", "service_user_id"),
         Index("ix_caller_identifiers_last_seen_at", "last_seen_at"),
+    )
+
+
+class ServiceUserCredentialModel(Base):
+    """Server-side credentials for organization-scoped service users.
+
+    PIN material is deliberately kept out of workflow runs, memory rows and
+    context JSON. ``pin_hash`` is a bcrypt digest; ``pin_salt`` is retained as
+    metadata for audit/algorithm migration and is never a plaintext PIN.
+    """
+
+    __tablename__ = "service_user_credentials"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    service_user_id = Column(
+        String(36), ForeignKey("service_users.id", ondelete="CASCADE"), nullable=False
+    )
+    credential_type = Column(String(32), nullable=False, default="sakinah_pin")
+    pin_hash = Column(String(255), nullable=False)
+    pin_salt = Column(String(64), nullable=True)
+    hash_algorithm = Column(
+        String(32), nullable=False, default="bcrypt_v1", server_default=text("'bcrypt_v1'")
+    )
+    status = Column(String(32), nullable=False, default="active", server_default=text("'active'"))
+    failed_attempt_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    locked_until = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+    last_verified_at = Column(DateTime(timezone=True), nullable=True)
+
+    organization = relationship("OrganizationModel")
+    service_user = relationship("ServiceUserModel", back_populates="credentials")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "service_user_id",
+            "credential_type",
+            name="uq_service_user_credentials_org_user_type",
+        ),
+        Index(
+            "ix_service_user_credentials_lookup",
+            "organization_id",
+            "service_user_id",
+            "credential_type",
+        ),
+        Index("ix_service_user_credentials_status", "status", "locked_until"),
     )
 
 
@@ -1115,6 +1170,8 @@ class MemoryModel(Base):
         String(36), ForeignKey("service_users.id", ondelete="CASCADE"), nullable=False
     )
     memory_type = Column(String(64), nullable=False)
+    fact_key = Column(String(128), nullable=True)
+    fact_category = Column(String(64), nullable=True)
     memory_text = Column(Text, nullable=False)
     embedding = Column(Vector(1536), nullable=True)
     importance = Column(Float, nullable=False, default=0.5)
@@ -1137,6 +1194,12 @@ class MemoryModel(Base):
     )
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     last_confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    first_observed_at = Column(DateTime(timezone=True), nullable=True)
+    source_count = Column(Integer, nullable=False, default=1, server_default=text("1"))
+    status = Column(String(32), nullable=False, default="active", server_default=text("'active'"))
+    superseded_by = Column(
+        String(36), ForeignKey("memories.id", ondelete="SET NULL"), nullable=True
+    )
     expires_at = Column(DateTime(timezone=True), nullable=True)
     active = Column(Boolean, nullable=False, default=True, server_default=text("true"))
 
@@ -1145,6 +1208,8 @@ class MemoryModel(Base):
         Index("ix_memories_source_agent_run_id", "source_agent_run_id"),
         Index("ix_memories_source_utterance_id", "source_utterance_id"),
         Index("ix_memories_type_active", "memory_type", "active"),
+        Index("ix_memories_service_user_fact_key", "service_user_id", "fact_key"),
+        Index("ix_memories_status", "status"),
         Index("ix_memories_active", "active", postgresql_where=text("active = true")),
         Index(
             "ix_memories_service_user_active_expiry",
