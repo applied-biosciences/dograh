@@ -93,20 +93,31 @@ class S3ObjectStore:
     async def list_objects(
         self, *, prefix: str = "recordings/", continuation_token: str | None = None, page_size: int = 50
     ) -> dict:
-        """List a bounded, allowlisted page of private bucket objects."""
+        """List the newest page from the complete, allowlisted object prefix.
+
+        S3 listings are lexicographic; using the first page made a current
+        bucket appear stuck in September. We enumerate the source server-side,
+        sort by object modification time, then page the result to the browser.
+        """
         logical_prefix = self._validate_browsable_key(prefix)
-        if continuation_token and len(continuation_token) > 4096:
+        if continuation_token and (not continuation_token.isdecimal() or len(continuation_token) > 12):
             raise ObjectNotAvailable("Invalid object listing cursor")
+        offset = int(continuation_token or "0")
         try:
-            request = {
-                "Bucket": self._require_bucket(),
-                "Prefix": self._object_key(logical_prefix),
-                "MaxKeys": min(100, max(1, page_size)),
-            }
-            if continuation_token:
-                request["ContinuationToken"] = continuation_token
+            request = {"Bucket": self._require_bucket(), "Prefix": self._object_key(logical_prefix), "MaxKeys": 1000}
+            all_items = []
             async with self.session.client("s3", **self._client_kwargs()) as client:
-                response = await client.list_objects_v2(**request)
+                while True:
+                    response = await client.list_objects_v2(**request)
+                    all_items.extend(response.get("Contents", []))
+                    next_token = response.get("NextContinuationToken")
+                    if not next_token:
+                        break
+                    request["ContinuationToken"] = next_token
+            all_items.sort(key=lambda item: item.get("LastModified"), reverse=True)
+            bounded_page_size = min(100, max(1, page_size))
+            page = all_items[offset:offset + bounded_page_size]
+            next_offset = offset + len(page)
             return {
                 "items": [
                     {
@@ -115,9 +126,10 @@ class S3ObjectStore:
                         "size_bytes": item.get("Size"),
                         "last_modified": item["LastModified"].isoformat() if item.get("LastModified") else None,
                     }
-                    for item in response.get("Contents", [])
+                    for item in page
                 ],
-                "next_cursor": response.get("NextContinuationToken"),
+                "next_cursor": str(next_offset) if next_offset < len(all_items) else None,
+                "total": len(all_items),
             }
         except (BotoCoreError, ClientError) as exc:
             raise ObjectNotAvailable("Bucket objects are unavailable") from exc

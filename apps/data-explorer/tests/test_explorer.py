@@ -45,7 +45,7 @@ class FakeStore:
         if "missing" in key: raise ObjectNotAvailable()
         return b"audio bytes"
     async def list_objects(self, *, prefix, continuation_token, page_size):
-        return {"items": [{"object_key": f"{prefix}call.wav", "file_name": "call.wav", "size_bytes": 4, "last_modified": "2026-01-01T00:00:00+00:00"}], "next_cursor": None}
+        return {"items": [{"object_key": f"{prefix}call.wav", "file_name": "call.wav", "size_bytes": 4, "last_modified": "2026-01-01T00:00:00+00:00"}], "next_cursor": None, "total": 1}
 
 
 class MissingObjectStore(FakeStore):
@@ -85,6 +85,23 @@ def test_aws_bucket_does_not_inherit_minio_configuration(monkeypatch):
     assert settings.s3_key_prefix == "aws"
     assert S3ObjectStore(settings)._object_key("recordings/call.wav") == "aws/recordings/call.wav"
     assert S3ObjectStore(settings)._object_key("aws/recordings/call.wav") == "aws/recordings/call.wav"
+
+
+def test_source_specific_store_settings_keep_aws_and_minio_separate(monkeypatch):
+    monkeypatch.setenv("DATA_EXPLORER_DATABASE_READONLY_URL", "postgresql+asyncpg://readonly@example.invalid/calmos")
+    monkeypatch.setenv("DATA_EXPLORER_ADMIN_TOKEN", "test-admin-token")
+    monkeypatch.setenv("DATA_EXPLORER_S3_BUCKET", "calmos-connect-recordings-prod")
+    monkeypatch.setenv("DATA_EXPLORER_S3_PREFIX", "aws")
+    monkeypatch.setenv("MINIO_BUCKET", "voice-audio")
+    monkeypatch.setenv("MINIO_ENDPOINT", "http://minio:9000")
+    monkeypatch.setenv("MINIO_ACCESS_KEY", "local-minio-user")
+    monkeypatch.setenv("MINIO_SECRET_KEY", "local-minio-secret")
+    settings = Settings.from_environment()
+    aws = settings.storage_settings("aws")
+    minio = settings.storage_settings("minio")
+    assert aws and aws.s3_bucket == "calmos-connect-recordings-prod" and aws.s3_endpoint_url is None
+    assert minio and minio.s3_bucket == "voice-audio" and minio.s3_endpoint_url == "http://minio:9000"
+    assert minio.object_store_access_key == "local-minio-user"
 
 
 @pytest.mark.asyncio
@@ -143,10 +160,13 @@ async def test_missing_object_does_not_return_a_signed_url(tmp_path):
 async def test_aws_storage_browser_lists_and_downloads_objects(client):
     listed = await client.get("/api/storage/objects?prefix=recordings/", headers=auth())
     assert listed.status_code == 200
+    assert listed.json()["source"] == "aws"
+    assert listed.json()["total"] == 1
     assert listed.json()["items"][0]["object_key"] == "recordings/call.wav"
     download = await client.get("/api/storage/objects/download?key=recordings/call.wav&return_url=true", headers=auth())
     assert download.status_code == 200
     assert download.json()["url"].startswith("https://object.test/")
+    assert (await client.get("/api/storage/objects?source=minio&prefix=recordings/", headers=auth())).json()["source"] == "minio"
 
 
 @pytest.mark.asyncio

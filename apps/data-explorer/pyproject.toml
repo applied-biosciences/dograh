@@ -1,6 +1,6 @@
 [project]
 name = "calmos-data-explorer"
-version = "1.0.0"
+version = "1.1.0"
 description = "Read-only administrative explorer for CALMOS durable call data"
 requires-python = ">=3.13,<3.14"
 dependencies = [

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -72,7 +73,15 @@ def create_app(
 ) -> FastAPI:
     settings = settings or Settings.from_environment()
     repository = repository or ExplorerRepository(settings.database_url)
-    object_store = object_store or S3ObjectStore(settings)
+    if object_store is not None:
+        object_stores: Mapping[str, S3ObjectStore] = {"aws": object_store, "minio": object_store}
+    else:
+        object_stores = {
+            source: S3ObjectStore(source_settings)
+            for source in ("aws", "minio")
+            if (source_settings := settings.storage_settings(source)) is not None
+        }
+    object_store = object_stores.get("aws") or object_stores.get("minio")
     audit_sink = audit_sink or FileAuditSink(settings.audit_log_path)
     admin_dependency = require_admin(settings)
 
@@ -81,7 +90,7 @@ def create_app(
         yield
         await repository.close()
 
-    app = FastAPI(title="CALMOS Data Explorer", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title="CALMOS Data Explorer", version="1.1.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.repository = repository
 
@@ -92,14 +101,24 @@ def create_app(
             # Data access without a privacy audit trail is intentionally denied.
             raise HTTPException(status_code=503, detail="Audit logging unavailable") from exc
 
+    def store_for_source(source: str) -> S3ObjectStore:
+        store = object_stores.get(source)
+        if store is None:
+            raise HTTPException(status_code=503, detail=f"{source.upper()} object storage is not configured")
+        return store
+
+    def store_for_file(file: dict) -> S3ObjectStore:
+        backend = str(file.get("storage_backend") or "").lower()
+        return store_for_source("minio" if backend in {"minio", "local"} else "aws")
+
     @app.get("/health")
     async def health() -> dict:
-        return {"service": "CALMOS DATA EXPLORER", "version": "1.0.0"}
+        return {"service": "CALMOS DATA EXPLORER", "version": "1.1.0"}
 
     @app.get("/api/client-config")
     async def client_config() -> dict:
         """Non-sensitive browser configuration; no credentials are exposed."""
-        return {"version": "1.0.0", "authentication_required": not settings.local_test_mode}
+        return {"version": "1.1.0", "authentication_required": not settings.local_test_mode, "storage_sources": sorted(object_stores)}
 
     @app.get("/api/dashboard")
     async def dashboard(principal: AdminPrincipal = Depends(admin_dependency)) -> dict:
@@ -154,7 +173,7 @@ def create_app(
         if file is None:
             raise _not_found("File")
         try:
-            url = await object_store.presigned_download(file["object_key"], file["file_name"], inline=inline)
+            url = await store_for_file(file).presigned_download(file["object_key"], file["file_name"], inline=inline)
         except ObjectNotAvailable as exc:
             raise HTTPException(status_code=404, detail="Associated object is unavailable") from exc
         await audit(principal, "file_downloaded", call_id=call_id, caller_id=call.get("caller_id"), file_id=file_id)
@@ -178,7 +197,7 @@ def create_app(
             raise _not_found("File")
         call, file = resolved
         try:
-            url = await object_store.presigned_download(file["object_key"], file["file_name"], inline=inline)
+            url = await store_for_file(file).presigned_download(file["object_key"], file["file_name"], inline=inline)
         except ObjectNotAvailable as exc:
             raise HTTPException(status_code=404, detail="Associated object is unavailable") from exc
         await audit(principal, "file_downloaded", call_id=call["call_id"], caller_id=call.get("caller_id"), file_id=file_id)
@@ -211,7 +230,7 @@ def create_app(
                 if call.get("full_transcript"):
                     archive.writestr("transcript.txt", call["full_transcript"])
                 for file in files:
-                    data = await object_store.bytes(file["object_key"], settings.package_max_bytes - used_bytes)
+                    data = await store_for_file(file).bytes(file["object_key"], settings.package_max_bytes - used_bytes)
                     used_bytes += len(data)
                     archive.writestr(f"files/{safe_filename(file['file_name'])}", data)
         except ObjectNotAvailable as exc:
@@ -267,28 +286,30 @@ def create_app(
 
     @app.get("/api/storage/objects")
     async def list_storage_objects(
+        source: str = "aws",
         prefix: str = "recordings/",
         cursor: str | None = None,
         page_size: int = Query(default=50, ge=1, le=100),
         principal: AdminPrincipal = Depends(admin_dependency),
     ) -> dict:
         try:
-            objects = await object_store.list_objects(prefix=prefix, continuation_token=cursor, page_size=page_size)
+            objects = await store_for_source(source).list_objects(prefix=prefix, continuation_token=cursor, page_size=page_size)
         except ObjectNotAvailable as exc:
             raise HTTPException(status_code=404, detail="AWS object storage is unavailable") from exc
         await audit(principal, "aws_objects_listed")
-        return objects
+        return {"source": source, **objects}
 
     @app.get("/api/storage/objects/download")
     async def download_storage_object(
         key: str,
+        source: str = "aws",
         inline: bool = False,
         return_url: bool = False,
         principal: AdminPrincipal = Depends(admin_dependency),
     ):
         try:
             key = browsable_key(key)
-            url = await object_store.presigned_download(key, safe_filename(key), inline=inline)
+            url = await store_for_source(source).presigned_download(key, safe_filename(key), inline=inline)
         except ObjectNotAvailable as exc:
             raise HTTPException(status_code=404, detail="Requested AWS object is unavailable") from exc
         await audit(principal, "aws_object_downloaded")
