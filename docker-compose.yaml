@@ -207,7 +207,7 @@ services:
       S3_ADDRESSING_STYLE: "${S3_ADDRESSING_STYLE:-}"
 
       MEMORY_ENABLED: "${MEMORY_ENABLED:-true}"
-      MEMORY_WORKFLOW_NAMES: "${MEMORY_WORKFLOW_NAMES:-Sakinah Scenario Console}"
+      MEMORY_WORKFLOW_NAMES: "${MEMORY_WORKFLOW_NAMES:-Sakinah Decision Agent v2,CALM - inbound,Sakinah Scenario Console,Sakinah Decision Agent v3.1,Sakinah Decision Agent v4.1}"
       MEMORY_REQUIRE_EXPLICIT_CONSENT: "${MEMORY_REQUIRE_EXPLICIT_CONSENT:-false}"
       SAKINAH_PIN_ENABLED: "${SAKINAH_PIN_ENABLED:-true}"
       SAKINAH_PIN_LENGTH: "${SAKINAH_PIN_LENGTH:-4}"

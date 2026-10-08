@@ -1,3 +1,11 @@
+# v1.47.0.29 (2026-10-08)
+
+- Add `Sakinah Decision Agent v3.1` and `Sakinah Decision Agent v4.1` to the
+  existing memory workflow allow-list without removing prior approved workflows.
+- Register the supplied revised v3.1/v4.1 definition packages with disabled
+  pre-call fetch, temporary PIN-on-hold memory wording, automatic saving unless
+  declined, continuing-conversation routing, and complete graph edges.
+
 # v1.47.0.28 (2026-10-07)
 
 - Add deterministic Sakinah continuity action events for caller-profile lookup,

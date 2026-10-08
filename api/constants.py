@@ -162,7 +162,9 @@ MEMORY_ENABLED = os.getenv("MEMORY_ENABLED", "true").lower() == "true"
 MEMORY_WORKFLOW_NAMES = {
     " ".join(name.split()).lower()
     for name in os.getenv(
-        "MEMORY_WORKFLOW_NAMES", "Sakinah Scenario Console"
+        "MEMORY_WORKFLOW_NAMES",
+        "Sakinah Decision Agent v2,CALM - inbound,Sakinah Scenario Console,"
+        "Sakinah Decision Agent v3.1,Sakinah Decision Agent v4.1",
     ).split(",")
     if name.strip()
 }

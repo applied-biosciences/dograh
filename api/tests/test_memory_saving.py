@@ -34,8 +34,26 @@ def test_workflow_setting_normalizes_names_without_changing_default(monkeypatch,
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.MEMORY_REQUIRE_EXPLICIT_CONSENT is False
-    assert module.memory_workflow_allowed("  SAKINAH\tScenario   Console ") is (setting != "")
-    assert module.memory_workflow_allowed(" CALM  - inbound ") is bool(setting)
+    expected = (
+        {
+            "sakinah decision agent v2",
+            "calm - inbound",
+            "sakinah scenario console",
+            "sakinah decision agent v3.1",
+            "sakinah decision agent v4.1",
+        }
+        if setting is None
+        else {
+            " ".join(name.split()).lower()
+            for name in setting.split(",")
+            if name.strip()
+        }
+    )
+    assert module.MEMORY_WORKFLOW_NAMES == expected
+    assert module.memory_workflow_allowed("  SAKINAH\tScenario   Console ") is ("sakinah scenario console" in expected)
+    assert module.memory_workflow_allowed(" CALM  - inbound ") is ("calm - inbound" in expected)
+    assert module.memory_workflow_allowed(" Sakinah Decision Agent v3.1 ") is ("sakinah decision agent v3.1" in expected)
+    assert module.memory_workflow_allowed(" Sakinah Decision Agent v4.1 ") is ("sakinah decision agent v4.1" in expected)
     assert not module.memory_workflow_allowed("Other workflow")
     assert not module.memory_workflow_allowed(None)
     assert not module.memory_workflow_allowed("  ")
@@ -91,7 +109,10 @@ def saving(monkeypatch):
         '{"memory_type":"preference","memory_text":"Enjoys gardening"}]}'
     )))
     monkeypatch.setattr(extraction, "MEMORY_ENABLED", True)
-    monkeypatch.setattr(constants, "MEMORY_WORKFLOW_NAMES", {"sakinah scenario console", "sakinah decision agent v2", "calm - inbound"})
+    monkeypatch.setattr(constants, "MEMORY_WORKFLOW_NAMES", {
+        "sakinah scenario console", "sakinah decision agent v2", "calm - inbound",
+        "sakinah decision agent v3.1", "sakinah decision agent v4.1",
+    })
     monkeypatch.setattr(call_persistence_client, "MEMORY_REQUIRE_EXPLICIT_CONSENT", False)
     monkeypatch.setattr(extraction, "db_client", db)
     monkeypatch.setattr(extraction, "get_resolved_ai_model_configuration", AsyncMock(return_value=SimpleNamespace(effective=SimpleNamespace(llm=True))))
@@ -103,6 +124,7 @@ def saving(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name, expected", [
     ("Sakinah Scenario Console", 1), ("Sakinah Decision Agent v2", 1),
+    ("Sakinah Decision Agent v3.1", 1), ("Sakinah Decision Agent v4.1", 1),
     ("CALM  - inbound", 1), ("  calm\t- INBOUND ", 1),
     ("Unrelated agent", 0), (None, 0), ("", 0),
 ])
