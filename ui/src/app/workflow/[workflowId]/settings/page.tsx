@@ -24,6 +24,7 @@ import {
     AIModelConfigurationV2Editor,
     type ModelConfigurationDefaultsV2,
 } from "@/components/AIModelConfigurationV2Editor";
+import { AvatarGalleryPicker } from "@/components/avatar/AvatarGalleryPicker";
 import { FlowEdge, FlowNode } from "@/components/flow/types";
 import { LLMConfigSelector } from "@/components/LLMConfigSelector";
 import SpinLoader from "@/components/SpinLoader";
@@ -49,6 +50,8 @@ import { fetchModelConfigurationPricing } from "@/lib/modelConfigurationPricing"
 import {
     type AmbientNoiseConfiguration,
     type CallDispositionOption,
+    type AvatarConfiguration,
+    DEFAULT_AVATAR_CONFIGURATION,
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
     DEFAULT_TURN_START_MIN_WORDS,
     DEFAULT_VOICEMAIL_DETECTION_CONFIGURATION,
@@ -320,6 +323,9 @@ function GeneralSection({
     const [includeTranscriptEndTimestamps, setIncludeTranscriptEndTimestamps] = useState(
         workflowConfigurations.transcript_configuration?.include_end_timestamps ?? false,
     );
+    const [avatarConfig, setAvatarConfig] = useState<AvatarConfiguration>(
+        workflowConfigurations.avatar_configuration ?? DEFAULT_AVATAR_CONFIGURATION,
+    );
     const [externalPbxFieldMappings, setExternalPbxFieldMappings] = useState<ExternalPBXFieldMapping[]>(
         workflowConfigurations.external_pbx_field_mappings,
     );
@@ -374,9 +380,11 @@ function GeneralSection({
             JSON.stringify(externalPbxFieldMappings) !==
             JSON.stringify(workflowConfigurations.external_pbx_field_mappings) ||
             JSON.stringify(externalPbxLeadHeaders) !==
-            JSON.stringify(workflowConfigurations.external_pbx_lead_headers)
+            JSON.stringify(workflowConfigurations.external_pbx_lead_headers) ||
+            JSON.stringify(avatarConfig) !==
+            JSON.stringify(workflowConfigurations.avatar_configuration ?? DEFAULT_AVATAR_CONFIGURATION)
         );
-    }, [name, workflowName, ambientNoiseConfig, maxCallDuration, maxUserIdleTimeout, smartTurnStopSecs, turnStartStrategy, turnStartMinWords, provisionalVadPauseSecs, turnStopStrategy, contextCompactionEnabled, calmScoringEnabled, normalizedCallDispositions, includeTranscriptEndTimestamps, externalPbxFieldMappings, externalPbxLeadHeaders, workflowConfigurations]);
+    }, [name, workflowName, ambientNoiseConfig, maxCallDuration, maxUserIdleTimeout, smartTurnStopSecs, turnStartStrategy, turnStartMinWords, provisionalVadPauseSecs, turnStopStrategy, contextCompactionEnabled, calmScoringEnabled, normalizedCallDispositions, includeTranscriptEndTimestamps, externalPbxFieldMappings, externalPbxLeadHeaders, avatarConfig, workflowConfigurations]);
 
     useUnsavedChanges("general", isDirty);
 
@@ -465,6 +473,10 @@ function GeneralSection({
                     },
                     external_pbx_field_mappings: externalPbxFieldMappings,
                     external_pbx_lead_headers: externalPbxLeadHeaders.map((field) => field.trim()),
+                    avatar_configuration: {
+                        ...avatarConfig,
+                        avatar_id: avatarConfig.avatar_id?.trim() || null,
+                    },
                 },
                 name,
             );
@@ -813,6 +825,72 @@ function GeneralSection({
 [2026-07-06T10:00:06.200Z -> 2026-07-06T10:00:08.700Z] user: January fifth, nineteen ninety.`}
                         </pre>
                     </div>
+                </div>
+
+                <Separator />
+
+                {/* Avatar */}
+                <div className="space-y-4">
+                    <div>
+                        <h3 className="text-sm font-medium">Avatar</h3>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                            Show a lip-synced SpatialReal avatar during browser calls with this agent.
+                        </p>
+                    </div>
+                    <div className="flex items-center justify-between">
+                        <Label htmlFor="avatar-enabled" className="text-sm">
+                            Enable Avatar
+                        </Label>
+                        <Switch
+                            id="avatar-enabled"
+                            checked={avatarConfig.enabled}
+                            onCheckedChange={(enabled) =>
+                                setAvatarConfig((prev) => ({ ...prev, enabled }))
+                            }
+                        />
+                    </div>
+                    {avatarConfig.enabled && (
+                        <>
+                            <div className="space-y-2">
+                                <Label className="text-sm">Avatar</Label>
+                                <AvatarGalleryPicker
+                                    value={avatarConfig.avatar_id ?? null}
+                                    onChange={(avatarId) =>
+                                        setAvatarConfig((prev) => ({
+                                            ...prev,
+                                            avatar_id: avatarId,
+                                        }))
+                                    }
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="avatar-mode" className="text-sm">
+                                    Driving Mode
+                                </Label>
+                                <Select
+                                    value={avatarConfig.mode ?? "default"}
+                                    onValueChange={(value) =>
+                                        setAvatarConfig((prev) => ({
+                                            ...prev,
+                                            mode: value === "default" ? null : (value as 'sdk' | 'host'),
+                                        }))
+                                    }
+                                >
+                                    <SelectTrigger id="avatar-mode">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="default">Deployment default</SelectItem>
+                                        <SelectItem value="sdk">Browser-driven (SDK)</SelectItem>
+                                        <SelectItem value="host">Server-driven (Host)</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                <p className="text-xs text-muted-foreground">
+                                    Server-driven gives lower latency and tighter lip-sync; browser-driven needs no avatar support on the backend.
+                                </p>
+                            </div>
+                        </>
+                    )}
                 </div>
 
                 <Separator />

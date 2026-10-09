@@ -32,6 +32,9 @@ COPY ui/components.json ./
 COPY ui/sentry.edge.config.ts ./
 COPY ui/sentry.server.config.ts ./
 COPY ui/postcss.config.mjs ./
+# Build-time IPv4 shim for hosts with black-holed IPv6 (see file header).
+# Inert unless referenced via the NODE_OPTIONS build arg.
+COPY ui/force-ipv4.cjs ./
 COPY ui/public ./public
 COPY ui/src ./src
 
@@ -41,6 +44,12 @@ ENV NEXT_TELEMETRY_DISABLED="1"
 ENV NEXT_PUBLIC_CHATWOOT_URL="https://chat.dograh.com"
 ENV NEXT_PUBLIC_CHATWOOT_TOKEN="3fkFx2mCEjNHjM9gaNc4A82X"
 ENV BACKEND_URL="http://api:8000"
+# Browser→API base URL, baked in at build (NEXT_PUBLIC_*). Empty by default so
+# same-origin deployments (server behind a proxy) are unaffected; set it for
+# split-origin setups like local dev where the browser must reach the API on a
+# different port (e.g. http://localhost:8000).
+ARG NEXT_PUBLIC_BACKEND_URL=""
+ENV NEXT_PUBLIC_BACKEND_URL="${NEXT_PUBLIC_BACKEND_URL}"
 
 # Build the application with standalone mode
 # Keep the build heap configurable so constrained Docker builders can complete

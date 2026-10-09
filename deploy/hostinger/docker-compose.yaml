@@ -26,6 +26,24 @@
 # =================================================================
 
 services:
+  spatial-ws:
+    image: nginx:alpine
+    container_name: spatial-ws
+    restart: unless-stopped
+    volumes:
+      - /opt/dograh/deploy/hostinger/spatial-ws.conf:/etc/nginx/nginx.conf:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik-proxy}"
+      - "traefik.http.routers.spatial-ws.rule=Host(`${PUBLIC_HOST}`) && PathPrefix(`/_spatial-ws`)"
+      - "traefik.http.routers.spatial-ws.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.spatial-ws.tls=true"
+      - "traefik.http.routers.spatial-ws.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.spatial-ws.priority=60"
+      - "traefik.http.services.spatial-ws.loadbalancer.server.port=8080"
+    networks:
+      - traefik
+
   postgres:
     image: pgvector/pgvector:pg17
     platform: linux/amd64
@@ -148,6 +166,11 @@ services:
       # order TURN URIs UDP-first. Required for correct remote WebRTC.
       ENVIRONMENT: "production"
       LOG_LEVEL: "INFO"
+      SPATIALREAL_APP_ID: "${SPATIALREAL_APP_ID:-}"
+      SPATIALREAL_API_KEY: "${SPATIALREAL_API_KEY:-}"
+      SPATIALREAL_AVATAR_ID: "${SPATIALREAL_AVATAR_ID:-}"
+      SPATIALREAL_REGION: "${SPATIALREAL_REGION:-us-west}"
+      SPATIALREAL_MODE: "${SPATIALREAL_MODE:-sdk}"
 
       # Public HTTPS origin (Traefik-terminated). Used for absolute URLs and
       # for verifying inbound telephony webhook signatures.
@@ -263,6 +286,24 @@ services:
       - "traefik.http.routers.dograh-ui.tls=true"
       - "traefik.http.routers.dograh-ui.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
       - "traefik.http.routers.dograh-ui.priority=1"
+      - "traefik.http.routers.dograh-root.rule=Host(`${PUBLIC_HOST}`) && Path(`/`)"
+      - "traefik.http.routers.dograh-root.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.dograh-root.tls=true"
+      - "traefik.http.routers.dograh-root.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.dograh-root.priority=50"
+      - "traefik.http.routers.dograh-root.middlewares=root-to-avatar"
+      - "traefik.http.middlewares.root-to-avatar.redirectregex.regex=^https://[^/]+/$$"
+      - "traefik.http.middlewares.root-to-avatar.redirectregex.replacement=https://www.sakinah.live/embed/avatar/emb_LzAz2tBo3d-UpYYrZKnOAc4F67knUUGPtgM1ohdlP24"
+      - "traefik.http.middlewares.root-to-avatar.redirectregex.permanent=false"
+      - "traefik.http.routers.dograh-apex.rule=Host(`sakinah.live`)"
+      - "traefik.http.routers.dograh-apex.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.dograh-apex.tls=true"
+      - "traefik.http.routers.dograh-apex.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.dograh-apex.priority=2"
+      - "traefik.http.routers.dograh-apex.middlewares=apex-to-www"
+      - "traefik.http.middlewares.apex-to-www.redirectregex.regex=^https?://sakinah\\.live/(.*)"
+      - "traefik.http.middlewares.apex-to-www.redirectregex.replacement=https://www.sakinah.live/$${1}"
+      - "traefik.http.middlewares.apex-to-www.redirectregex.permanent=true"
       - "traefik.http.services.dograh-ui.loadbalancer.server.port=3010"
     networks:
       - app-network

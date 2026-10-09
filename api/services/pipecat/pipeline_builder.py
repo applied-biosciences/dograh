@@ -44,6 +44,7 @@ def build_pipeline(
     sakinah_secure_input=None,
     sakinah_user_observer=None,
     sakinah_output_observer=None,
+    avatar_processor=None,
 ):
     """Build the main pipeline with all components.
 
@@ -107,6 +108,7 @@ def build_pipeline(
             *([sakinah_avatar_capture] if sakinah_avatar_capture else []),
             transport.output(),  # Transport bot output
             AudioPathDiagnosticsProcessor(stage="output"),
+            *([avatar_processor] if avatar_processor else []),
             audio_buffer,  # AudioBufferProcessor - records both input and output audio
             assistant_context_aggregator,  # Assistant spoken responses
             pipeline_metrics_aggregator,
@@ -130,6 +132,7 @@ def build_realtime_pipeline(
     sakinah_secure_input=None,
     sakinah_user_observer=None,
     sakinah_output_observer=None,
+    avatar_processor=None,
 ):
     """Build a pipeline for realtime (speech-to-speech) LLM services.
 
@@ -181,6 +184,7 @@ def build_realtime_pipeline(
             pipeline_engine_callback_processor,
             transport.output(),
             AudioPathDiagnosticsProcessor(stage="output"),
+            *([avatar_processor] if avatar_processor else []),
             audio_buffer,
             assistant_context_aggregator,
             pipeline_metrics_aggregator,

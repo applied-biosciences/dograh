@@ -384,3 +384,40 @@ OSS_JWT_SECRET = os.getenv("OSS_JWT_SECRET", "change-me-in-production")
 OSS_JWT_EXPIRY_HOURS = int(os.getenv("OSS_JWT_EXPIRY_HOURS", "720"))  # 30 days
 
 TUNER_BASE_URL = os.getenv("TUNER_BASE_URL", "https://api.usetuner.ai")
+
+# SpatialReal avatar engine (AvatarKit). The API key never leaves the backend;
+# the browser gets a short-lived session token minted via /avatar/session.
+SPATIALREAL_APP_ID = os.getenv("SPATIALREAL_APP_ID", "")
+SPATIALREAL_API_KEY = os.getenv("SPATIALREAL_API_KEY", "")
+SPATIALREAL_AVATAR_ID = os.getenv("SPATIALREAL_AVATAR_ID", "")
+SPATIALREAL_REGION = os.getenv("SPATIALREAL_REGION", "us-west")
+SPATIALREAL_CONSOLE_ENDPOINT = os.getenv(
+    "SPATIALREAL_CONSOLE_ENDPOINT",
+    f"https://console.{SPATIALREAL_REGION}.spatialwalk.cloud/v1/console",
+)
+# New-platform (spatialreal.ai) session-token endpoint. One address for every
+# region; exchanges X-API-KEY for {"session_token": ...}.
+SPATIALREAL_AUTH_ENDPOINT = os.getenv(
+    "SPATIALREAL_AUTH_ENDPOINT",
+    "https://api.spatialreal.com/v1/auth/session-token",
+)
+# Session tokens are capped at 24h by SpatialReal; default to 12h.
+SPATIALREAL_TOKEN_TTL = int(os.getenv("SPATIALREAL_TOKEN_TTL", "43200"))
+# Avatar driving mode: "sdk" (browser streams audio to SpatialReal directly),
+# "host" (backend drives the avatar from inside the pipeline and relays
+# audio+animation to the browser), or "off".
+SPATIALREAL_MODE = os.getenv("SPATIALREAL_MODE", "sdk").lower()
+SPATIALREAL_INGRESS_ENDPOINT = os.getenv(
+    "SPATIALREAL_INGRESS_ENDPOINT",
+    f"wss://api.{SPATIALREAL_REGION}.spatialwalk.cloud/v2/driveningress",
+)
+# Character metadata endpoint, used to verify an avatar id exists before
+# adding it to the org's avatar library and at session time. On the new
+# platform it requires the X-API-KEY header.
+SPATIALREAL_CHARACTER_ENDPOINT = os.getenv(
+    "SPATIALREAL_CHARACTER_ENDPOINT",
+    "https://api.spatialreal.cloud/v2/character",
+)
+# Max concurrent host-mode avatar sessions. Beyond the cap new runs proceed
+# audio-only (the avatar is refused, never the call).
+SPATIALREAL_MAX_SESSIONS = int(os.getenv("SPATIALREAL_MAX_SESSIONS", "10"))
