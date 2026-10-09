@@ -1,14 +1,25 @@
 "use client";
 
-import { Check, Copy, Loader2, Plus, Star } from "lucide-react";
+import { Check, Copy, Loader2, Plus, Star, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
     addAvatarToLibraryApiV1AvatarLibraryPost,
+    deleteAvatarFromLibraryApiV1AvatarLibraryAvatarIdDelete,
     getAvatarLibraryApiV1AvatarLibraryGet,
 } from "@/client/sdk.gen";
 import type { AvatarLibraryEntry } from "@/client/types.gen";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
     Dialog,
@@ -51,6 +62,7 @@ function AvatarCard({
     copyId,
     imageId,
     imageUrl,
+    onDelete,
 }: {
     title: string;
     subtitle?: string;
@@ -61,6 +73,7 @@ function AvatarCard({
     copyId?: string;
     imageId?: string;
     imageUrl?: string | null;
+    onDelete?: () => void;
 }) {
     // Preference: an explicit image URL (user-provided at import), then the
     // bundled portrait at /avatars/<avatar_id>.jpg (built-ins), then the
@@ -102,6 +115,24 @@ function AvatarCard({
             {selected && (
                 <span className="absolute right-2 top-2 rounded-full bg-primary p-1 text-primary-foreground">
                     <Check className="h-3 w-3" />
+                </span>
+            )}
+            {onDelete && (
+                <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Delete ${title}`}
+                    className={cn(
+                        "absolute right-2 rounded-full bg-black/50 p-1.5 text-white/80 transition-colors hover:bg-destructive hover:text-white",
+                        selected ? "top-9" : "top-2",
+                    )}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onDelete();
+                    }}
+                    onKeyDown={(e) => e.stopPropagation()}
+                >
+                    <Trash2 className="h-3 w-3" />
                 </span>
             )}
             {badge && (
@@ -159,6 +190,8 @@ export function AvatarGalleryPicker({
     const [newImageUrl, setNewImageUrl] = useState("");
     const [adding, setAdding] = useState(false);
     const [addError, setAddError] = useState<string | null>(null);
+    const [deleteTarget, setDeleteTarget] = useState<AvatarLibraryEntry | null>(null);
+    const [deleting, setDeleting] = useState(false);
 
     useEffect(() => {
         if (authLoading || !user || hasFetched.current) return;
@@ -201,6 +234,29 @@ export function AvatarGalleryPicker({
         toast.success("Avatar added to library");
     };
 
+    const handleDelete = async () => {
+        if (!deleteTarget) return;
+        setDeleting(true);
+        const response = await deleteAvatarFromLibraryApiV1AvatarLibraryAvatarIdDelete({
+            path: { avatar_id: deleteTarget.avatar_id },
+        });
+        setDeleting(false);
+        if (response.error) {
+            toast.error(detailFromError(response.error, "Failed to delete avatar"));
+            setDeleteTarget(null);
+            return;
+        }
+        if (response.data) {
+            setAvatars(response.data.avatars);
+        }
+        // A workflow pointing at a deleted avatar falls back to Default.
+        if (value === deleteTarget.avatar_id) {
+            onChange(null);
+        }
+        toast.success(`"${deleteTarget.name}" removed from library`);
+        setDeleteTarget(null);
+    };
+
     if (loading) {
         return (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -230,6 +286,7 @@ export function AvatarGalleryPicker({
                         copyId={avatar.avatar_id}
                         imageId={avatar.avatar_id}
                         imageUrl={avatar.image_url}
+                        onDelete={() => setDeleteTarget(avatar)}
                     />
                 ))}
                 <button
@@ -248,6 +305,41 @@ export function AvatarGalleryPicker({
                 Avatars are shared across all agents. Create new ones in SpatialReal
                 Studio, then import them here with their ID.
             </p>
+
+            <AlertDialog
+                open={deleteTarget !== null}
+                onOpenChange={(open) => !open && setDeleteTarget(null)}
+            >
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>
+                            Remove &quot;{deleteTarget?.name}&quot;?
+                        </AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Agents still set to this avatar will use the default
+                            avatar instead.
+                            {deleteTarget?.builtin &&
+                                " This is a built-in avatar — you can bring it back later by importing its ID again."}
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={(e) => {
+                                e.preventDefault();
+                                handleDelete();
+                            }}
+                            disabled={deleting}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                            {deleting && (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            )}
+                            Remove
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
 
             <Dialog open={addOpen} onOpenChange={setAddOpen}>
                 <DialogContent className="sm:max-w-md">

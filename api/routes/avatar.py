@@ -161,11 +161,36 @@ async def create_avatar_session(
     )
 
 
-def _merged_library(stored: list | None) -> list[AvatarLibraryEntry]:
-    """Built-ins first, then user imports, de-duplicated by avatar id."""
-    entries = [AvatarLibraryEntry(**item, builtin=True) for item in BUILTIN_AVATARS]
-    seen = {entry.avatar_id for entry in entries}
-    for item in stored or []:
+def _load_store(raw: object) -> tuple[list[dict], set[str]]:
+    """Normalize the stored config value.
+
+    Accepts the legacy bare list of user avatars as well as the current
+    ``{"avatars": [...], "hidden_builtins": [...]}`` shape.
+    """
+    if isinstance(raw, dict):
+        avatars = [item for item in raw.get("avatars") or [] if item.get("avatar_id")]
+        return avatars, set(raw.get("hidden_builtins") or [])
+    if isinstance(raw, list):
+        return [item for item in raw if item.get("avatar_id")], set()
+    return [], set()
+
+
+def _dump_store(avatars: list[dict], hidden_builtins: set[str]) -> dict:
+    return {"avatars": avatars, "hidden_builtins": sorted(hidden_builtins)}
+
+
+def _merged_library(
+    user_avatars: list[dict], hidden_builtins: set[str] | None = None
+) -> list[AvatarLibraryEntry]:
+    """Built-ins first (minus deleted ones), then user imports, de-duplicated."""
+    hidden = hidden_builtins or set()
+    entries = [
+        AvatarLibraryEntry(**item, builtin=True)
+        for item in BUILTIN_AVATARS
+        if item["avatar_id"] not in hidden
+    ]
+    seen = {b["avatar_id"] for b in BUILTIN_AVATARS}
+    for item in user_avatars:
         avatar_id = item.get("avatar_id")
         if not avatar_id or avatar_id in seen:
             continue
@@ -228,11 +253,12 @@ async def get_avatar_library(
     user: UserModel = Depends(get_user),
 ) -> AvatarLibraryResponse:
     """List the org's selectable avatars (built-ins plus imports)."""
-    stored = await db_client.get_configuration_value(
+    raw = await db_client.get_configuration_value(
         user.selected_organization_id, AVATAR_LIBRARY_KEY, default=[]
     )
+    user_avatars, hidden = _load_store(raw)
     return AvatarLibraryResponse(
-        avatars=_merged_library(stored),
+        avatars=_merged_library(user_avatars, hidden),
         default_avatar_id=SPATIALREAL_AVATAR_ID,
     )
 
@@ -245,16 +271,23 @@ async def add_avatar_to_library(
     """Import an avatar by SpatialReal id after verifying it exists.
 
     Re-importing an id that was already user-added updates its name/image
-    (no re-verification); built-in ids are fixed and return unchanged.
+    (no re-verification). Re-importing a deleted built-in restores it;
+    visible built-ins are fixed and return unchanged.
     """
     organization_id = user.selected_organization_id
-    stored = await db_client.get_configuration_value(
+    raw = await db_client.get_configuration_value(
         organization_id, AVATAR_LIBRARY_KEY, default=[]
     )
+    user_avatars, hidden = _load_store(raw)
 
     if any(b["avatar_id"] == request.avatar_id for b in BUILTIN_AVATARS):
+        if request.avatar_id in hidden:
+            hidden.discard(request.avatar_id)
+            await db_client.upsert_configuration(
+                organization_id, AVATAR_LIBRARY_KEY, _dump_store(user_avatars, hidden)
+            )
         return AvatarLibraryResponse(
-            avatars=_merged_library(stored),
+            avatars=_merged_library(user_avatars, hidden),
             default_avatar_id=SPATIALREAL_AVATAR_ID,
         )
 
@@ -262,24 +295,63 @@ async def add_avatar_to_library(
     if request.image_url:
         entry["image_url"] = request.image_url
 
-    existing = [item for item in stored or [] if item.get("avatar_id")]
-    if any(item["avatar_id"] == request.avatar_id for item in existing):
+    if any(item["avatar_id"] == request.avatar_id for item in user_avatars):
         updated = [
             entry if item["avatar_id"] == request.avatar_id else item
-            for item in existing
+            for item in user_avatars
         ]
     else:
         await _verify_avatar_exists(request.avatar_id)
-        updated = existing + [entry]
+        updated = user_avatars + [entry]
     await db_client.upsert_configuration(
-        organization_id, AVATAR_LIBRARY_KEY, updated
+        organization_id, AVATAR_LIBRARY_KEY, _dump_store(updated, hidden)
     )
     logger.info(
         f"Avatar {request.avatar_id} ({request.name!r}) added to library of "
         f"org {organization_id} by user {user.id}"
     )
     return AvatarLibraryResponse(
-        avatars=_merged_library(updated), default_avatar_id=SPATIALREAL_AVATAR_ID
+        avatars=_merged_library(updated, hidden),
+        default_avatar_id=SPATIALREAL_AVATAR_ID,
+    )
+
+
+@router.delete("/library/{avatar_id}", response_model=AvatarLibraryResponse)
+async def delete_avatar_from_library(
+    avatar_id: str,
+    user: UserModel = Depends(get_user),
+) -> AvatarLibraryResponse:
+    """Remove an avatar from the library.
+
+    User-added avatars are deleted outright; built-ins are hidden and can be
+    restored by importing their id again. Workflows still pointing at a
+    removed avatar fall back to the deployment default at call time.
+    """
+    organization_id = user.selected_organization_id
+    raw = await db_client.get_configuration_value(
+        organization_id, AVATAR_LIBRARY_KEY, default=[]
+    )
+    user_avatars, hidden = _load_store(raw)
+
+    if any(b["avatar_id"] == avatar_id for b in BUILTIN_AVATARS):
+        hidden.add(avatar_id)
+    elif any(item["avatar_id"] == avatar_id for item in user_avatars):
+        user_avatars = [
+            item for item in user_avatars if item["avatar_id"] != avatar_id
+        ]
+    else:
+        raise HTTPException(status_code=404, detail="Avatar not in library")
+
+    await db_client.upsert_configuration(
+        organization_id, AVATAR_LIBRARY_KEY, _dump_store(user_avatars, hidden)
+    )
+    logger.info(
+        f"Avatar {avatar_id} removed from library of org {organization_id} "
+        f"by user {user.id}"
+    )
+    return AvatarLibraryResponse(
+        avatars=_merged_library(user_avatars, hidden),
+        default_avatar_id=SPATIALREAL_AVATAR_ID,
     )
 
 

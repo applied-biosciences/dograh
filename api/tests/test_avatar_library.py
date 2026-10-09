@@ -125,9 +125,10 @@ class TestAddAvatar:
         assert added["name"] == "Omani Male"
         assert added["builtin"] is False
         # Persisted for the org, trimmed.
-        assert client.store[(7, "avatar_library")] == [
-            {"avatar_id": VALID_NEW_ID, "name": "Omani Male"}
-        ]
+        assert client.store[(7, "avatar_library")] == {
+            "avatars": [{"avatar_id": VALID_NEW_ID, "name": "Omani Male"}],
+            "hidden_builtins": [],
+        }
 
     def test_reimport_updates_name_and_image(self, client):
         FakeAsyncClient.payload = {"characterId": VALID_NEW_ID}
@@ -148,13 +149,16 @@ class TestAddAvatar:
         assert second.status_code == 200
         # No second SpatialReal lookup; the stored entry is replaced.
         assert FakeAsyncClient.calls == []
-        assert client.store[(7, "avatar_library")] == [
-            {
-                "avatar_id": VALID_NEW_ID,
-                "name": "renamed",
-                "image_url": "https://example.com/omani.jpg",
-            }
-        ]
+        assert client.store[(7, "avatar_library")] == {
+            "avatars": [
+                {
+                    "avatar_id": VALID_NEW_ID,
+                    "name": "renamed",
+                    "image_url": "https://example.com/omani.jpg",
+                }
+            ],
+            "hidden_builtins": [],
+        }
         updated = next(
             a for a in second.json()["avatars"] if a["avatar_id"] == VALID_NEW_ID
         )
@@ -171,6 +175,58 @@ class TestAddAvatar:
             },
         )
         assert response.status_code == 422
+
+
+class TestDeleteAvatar:
+    def test_delete_user_added(self, client):
+        FakeAsyncClient.payload = {"characterId": VALID_NEW_ID}
+        client.post(
+            "/avatar/library", json={"avatar_id": VALID_NEW_ID, "name": "Omani Male"}
+        )
+        response = client.delete(f"/avatar/library/{VALID_NEW_ID}")
+        assert response.status_code == 200
+        ids = [a["avatar_id"] for a in response.json()["avatars"]]
+        assert VALID_NEW_ID not in ids
+        assert client.store[(7, "avatar_library")] == {
+            "avatars": [],
+            "hidden_builtins": [],
+        }
+
+    def test_delete_builtin_hides_and_reimport_restores(self, client):
+        builtin_id = BUILTIN_AVATARS[2]["avatar_id"]
+        response = client.delete(f"/avatar/library/{builtin_id}")
+        assert response.status_code == 200
+        assert builtin_id not in [a["avatar_id"] for a in response.json()["avatars"]]
+        # Hidden, not forgotten.
+        assert client.store[(7, "avatar_library")]["hidden_builtins"] == [builtin_id]
+        # GET respects the hidden list.
+        listed = client.get("/avatar/library").json()
+        assert builtin_id not in [a["avatar_id"] for a in listed["avatars"]]
+
+        # Re-importing the builtin id restores it, without a SpatialReal call.
+        FakeAsyncClient.calls = []
+        restored = client.post(
+            "/avatar/library", json={"avatar_id": builtin_id, "name": "whatever"}
+        )
+        assert restored.status_code == 200
+        assert FakeAsyncClient.calls == []
+        assert builtin_id in [a["avatar_id"] for a in restored.json()["avatars"]]
+        assert client.store[(7, "avatar_library")]["hidden_builtins"] == []
+
+    def test_delete_unknown_404(self, client):
+        response = client.delete(f"/avatar/library/{VALID_NEW_ID}")
+        assert response.status_code == 404
+
+    def test_legacy_list_store_still_reads(self, client):
+        client.store[(7, "avatar_library")] = [
+            {"avatar_id": VALID_NEW_ID, "name": "Omani Male"}
+        ]
+        response = client.delete(f"/avatar/library/{VALID_NEW_ID}")
+        assert response.status_code == 200
+        assert client.store[(7, "avatar_library")] == {
+            "avatars": [],
+            "hidden_builtins": [],
+        }
 
     def test_builtin_import_is_idempotent(self, client):
         response = client.post(

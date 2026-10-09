@@ -15361,6 +15361,50 @@ export type AddAvatarToLibraryApiV1AvatarLibraryPostResponses = {
 
 export type AddAvatarToLibraryApiV1AvatarLibraryPostResponse = AddAvatarToLibraryApiV1AvatarLibraryPostResponses[keyof AddAvatarToLibraryApiV1AvatarLibraryPostResponses];
 
+export type DeleteAvatarFromLibraryApiV1AvatarLibraryAvatarIdDeleteData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Avatar Id
+         */
+        avatar_id: string;
+    };
+    query?: never;
+    url: '/api/v1/avatar/library/{avatar_id}';
+};
+
+export type DeleteAvatarFromLibraryApiV1AvatarLibraryAvatarIdDeleteErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteAvatarFromLibraryApiV1AvatarLibraryAvatarIdDeleteError = DeleteAvatarFromLibraryApiV1AvatarLibraryAvatarIdDeleteErrors[keyof DeleteAvatarFromLibraryApiV1AvatarLibraryAvatarIdDeleteErrors];
+
+export type DeleteAvatarFromLibraryApiV1AvatarLibraryAvatarIdDeleteResponses = {
+    /**
+     * Successful Response
+     */
+    200: AvatarLibraryResponse;
+};
+
+export type DeleteAvatarFromLibraryApiV1AvatarLibraryAvatarIdDeleteResponse = DeleteAvatarFromLibraryApiV1AvatarLibraryAvatarIdDeleteResponses[keyof DeleteAvatarFromLibraryApiV1AvatarLibraryAvatarIdDeleteResponses];
+
 export type OptionsInitApiV1PublicEmbedInitOptionsData = {
     body?: never;
     path?: never;
