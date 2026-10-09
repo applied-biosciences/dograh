@@ -113,3 +113,26 @@ def test_visibility_agrees_with_routing(exporter):
         set_current_org_id(org_id)
         assert exporter.has_org(org_id) is routed_to_own_project
         assert resolve(None) is routed_to_own_project
+
+
+def test_org_registration_does_not_require_exporter_private_headers(monkeypatch):
+    class ExporterWithoutPrivateHeaders:
+        created = 0
+
+        def __init__(self, *, endpoint, headers):
+            self.endpoint = endpoint
+            self.headers = headers
+            type(self).created += 1
+
+        def shutdown(self):
+            pass
+
+    monkeypatch.setattr(
+        tracing_config, "OTLPSpanExporter", ExporterWithoutPrivateHeaders
+    )
+    routing = tracing_config._OrgRoutingExporter(default_exporter=None)
+
+    routing.register_org(ORG, **CREDS)
+    routing.register_org(ORG, **CREDS)
+
+    assert ExporterWithoutPrivateHeaders.created == 1

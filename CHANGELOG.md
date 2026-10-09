@@ -1,3 +1,17 @@
+# v1.47.0.30 (2026-10-09)
+
+- Add the disabled-by-default `MEMORY_RECOGNISED_MAY_REFERENCE` setting. When
+  enabled, recognised callers can receive only explicitly permitted low/normal
+  memories as non-explicit verbal references; high, restricted, sensitive, and
+  otherwise disallowed memories remain non-verbal, and explicit detail remains
+  verified-only.
+- Replace OpenTelemetry exporter private-header inspection with routing-owned
+  configuration tracking. Isolate optional Langfuse tracing setup failures so
+  QA, integrations, and webhooks continue to run, while genuine integration
+  failures retain their existing error handling.
+- Plumb the new setting through the base Docker Compose API environment with a
+  safe `false` default. No database migration is included.
+
 # v1.47.0.29 (2026-10-08)
 
 - Add `Sakinah Decision Agent v3.1` and `Sakinah Decision Agent v4.1` to the

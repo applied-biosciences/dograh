@@ -6,7 +6,12 @@ from typing import Any
 
 from loguru import logger
 
-from api.constants import MEMORY_ENABLED
+from api.constants import (
+    MEMORY_ENABLED,
+    MEMORY_MAX_RESULTS,
+    MEMORY_MIN_SIMILARITY,
+    MEMORY_RECOGNISED_MAY_REFERENCE,
+)
 from api.db import db_client
 
 
@@ -41,6 +46,43 @@ def _prompt_context(caller_status: str, memories: list[dict[str, Any]]) -> str:
             f"speech_rule={speech_rule}] {memory['memory_text']}"
         )
     return "\n".join(lines)
+
+
+def _permitted_for_prompt(
+    memory: dict[str, Any], *, verified: bool, caller_status: str | None = None
+) -> bool:
+    """Keep only memories allowed to cross the backend-to-prompt boundary."""
+    if not memory.get("internal_context_allowed", False):
+        return False
+    if verified:
+        return True
+    if caller_status == "RECOGNISED":
+        return True
+    return memory.get("sensitivity") in {"low", "normal"}
+
+
+def _apply_prompt_permissions(
+    memories: list[dict[str, Any]], *, verified: bool, caller_status: str
+) -> list[dict[str, Any]]:
+    """Annotate prompt memories with independently enforced speech permissions."""
+    may_reference = verified or (
+        MEMORY_RECOGNISED_MAY_REFERENCE and caller_status == "RECOGNISED"
+    )
+    permitted = [
+        memory
+        for memory in memories
+        if _permitted_for_prompt(memory, verified=verified, caller_status=caller_status)
+    ]
+    for memory in permitted:
+        memory["may_verbalize"] = bool(
+            may_reference
+            and memory.get("verbal_reference_allowed")
+            and memory.get("sensitivity") in {"low", "normal"}
+        )
+        memory["may_use_explicit_detail"] = bool(
+            verified and memory.get("explicit_detail_allowed")
+        )
+    return permitted
 
 
 async def prepare_memory_context(
@@ -83,19 +125,45 @@ async def prepare_memory_context(
         )
         service_user = resolution.service_user
         caller_identifier = resolution.caller_identifier
+        # This legacy path has no PIN/Continue proof. A stored caller match is
+        # therefore still recognition, not VERIFIED identity.
         caller_status = "FIRST_TIME" if resolution.created else "RECOGNISED"
+        memories: list[dict[str, Any]] = []
+        if not resolution.created and MEMORY_RECOGNISED_MAY_REFERENCE:
+            memory_permitted = await db_client.is_memory_permitted(
+                service_user.id, permission_type="memory_use"
+            )
+            if memory_permitted:
+                memories = await db_client.get_permitted_memories(
+                    service_user.id,
+                    verified=False,
+                    limit=MEMORY_MAX_RESULTS,
+                    min_similarity=MEMORY_MIN_SIMILARITY,
+                )
+                memories = _apply_prompt_permissions(
+                    memories, verified=False, caller_status=caller_status
+                )
         return {
             "caller_status": caller_status,
             "service_user_id": service_user.id,
             "caller_identifier_id": caller_identifier.id,
             "preferred_name": None,
-            "memory_available": False,
-            "memory_authorisation_level": "none",
-            "privacy_safe_previous_summary": None,
-            "relevant_memories": [],
-            "prompt_context": _prompt_context(caller_status, []),
+            "memory_available": bool(memories),
+            "memory_authorisation_level": (
+                "recognised_reference" if memories else "none"
+            ),
+            "privacy_safe_previous_summary": (
+                "Returning caller recognised; only explicitly permitted low/normal "
+                "continuity information may be referenced."
+                if caller_status == "RECOGNISED" and memories
+                else None
+            ),
+            "relevant_memories": memories,
+            "prompt_context": _prompt_context(caller_status, memories),
             "greeting_override": unknown["greeting_override"],
         }
     except Exception:  # noqa: BLE001 - caller lookup cannot block a live call
-        logger.warning("Memory lookup failed; continuing with an UNKNOWN caller context")
+        logger.warning(
+            "Memory lookup failed; continuing with an UNKNOWN caller context"
+        )
         return unknown

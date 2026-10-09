@@ -120,6 +120,7 @@ CALMOS Connect stores structured call data in PostgreSQL, audio/transcript objec
 | `MEMORY_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model used when the organization has embeddings configured |
 | `MEMORY_MAX_RESULTS` | `5` | Maximum permitted memories added to a Sakinah context |
 | `MEMORY_MIN_SIMILARITY` | `0.72` | Minimum cosine similarity for vector memory retrieval |
+| `MEMORY_RECOGNISED_MAY_REFERENCE` | `false` | Allow recognised callers to receive permitted low/normal memories as verbal references; keep disabled until feature-off tests pass and operators have reviewed the exact workflow names |
 | `CALLER_IDENTIFIER_HASH_KEY` | Falls back to `OSS_JWT_SECRET` | Stable deployment secret used to HMAC caller identifiers. Set an independent value in production and do not rotate it without a re-key plan. |
 | `RECORD_CALLS` | `true` | Capture and persist call recordings; transcripts remain structured call data |
 

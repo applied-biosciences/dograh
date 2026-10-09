@@ -171,6 +171,9 @@ MEMORY_WORKFLOW_NAMES = {
 MEMORY_REQUIRE_EXPLICIT_CONSENT = (
     os.getenv("MEMORY_REQUIRE_EXPLICIT_CONSENT", "false").lower() == "true"
 )
+MEMORY_RECOGNISED_MAY_REFERENCE = (
+    os.getenv("MEMORY_RECOGNISED_MAY_REFERENCE", "false").lower() == "true"
+)
 
 
 def _bounded_int_setting(name: str, default: int, minimum: int, maximum: int) -> int:

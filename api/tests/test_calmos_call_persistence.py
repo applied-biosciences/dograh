@@ -228,6 +228,162 @@ async def test_stored_verified_identifier_does_not_bypass_pin_and_continue_gate(
 
 
 @pytest.mark.asyncio
+async def test_recognised_caller_may_reference_low_and_normal_memories_when_enabled(
+    monkeypatch,
+):
+    fake_db = _MemoryDB(
+        created=False,
+        memories=[
+            {
+                "memory_type": "preference",
+                "memory_text": "Prefers mornings",
+                "sensitivity": "low",
+                "internal_context_allowed": True,
+                "verbal_reference_allowed": True,
+                "explicit_detail_allowed": True,
+            },
+            {
+                "memory_type": "goal",
+                "memory_text": "Wants to return to gardening",
+                "sensitivity": "normal",
+                "internal_context_allowed": True,
+                "verbal_reference_allowed": True,
+                "explicit_detail_allowed": False,
+            },
+        ],
+    )
+    monkeypatch.setattr(orchestrator, "db_client", fake_db)
+    monkeypatch.setattr(orchestrator, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(orchestrator, "MEMORY_RECOGNISED_MAY_REFERENCE", True)
+
+    result = await orchestrator.prepare_memory_context(
+        organization_id=1,
+        call_context={"caller_number": "caller-recognised"},
+    )
+
+    assert result["caller_status"] == "RECOGNISED"
+    assert [memory["may_verbalize"] for memory in result["relevant_memories"]] == [
+        True,
+        True,
+    ]
+    assert all(
+        memory["may_use_explicit_detail"] is False
+        for memory in result["relevant_memories"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_recognised_caller_keeps_high_sensitivity_memories_non_verbal_when_enabled(
+    monkeypatch,
+):
+    fake_db = _MemoryDB(
+        created=False,
+        memories=[
+            {
+                "memory_type": "clinical_context",
+                "memory_text": "Sensitive historic detail",
+                "sensitivity": "high",
+                "internal_context_allowed": True,
+                "verbal_reference_allowed": True,
+                "explicit_detail_allowed": True,
+            },
+            {
+                "memory_type": "risk_factor",
+                "memory_text": "Restricted historic detail",
+                "sensitivity": "restricted",
+                "internal_context_allowed": True,
+                "verbal_reference_allowed": True,
+                "explicit_detail_allowed": True,
+            },
+            {
+                "memory_type": "personal_fact",
+                "memory_text": "Sensitive historic detail",
+                "sensitivity": "sensitive",
+                "internal_context_allowed": True,
+                "verbal_reference_allowed": True,
+                "explicit_detail_allowed": True,
+            },
+        ],
+    )
+    monkeypatch.setattr(orchestrator, "db_client", fake_db)
+    monkeypatch.setattr(orchestrator, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(orchestrator, "MEMORY_RECOGNISED_MAY_REFERENCE", True)
+
+    result = await orchestrator.prepare_memory_context(
+        organization_id=1,
+        call_context={"caller_number": "caller-recognised"},
+    )
+
+    assert result["relevant_memories"]
+    assert all(
+        memory["may_verbalize"] is False for memory in result["relevant_memories"]
+    )
+    assert all(
+        memory["may_use_explicit_detail"] is False
+        for memory in result["relevant_memories"]
+    )
+
+
+def test_verified_permission_is_separate_from_recognised_reference_permission(
+    monkeypatch,
+):
+    monkeypatch.setattr(orchestrator, "MEMORY_RECOGNISED_MAY_REFERENCE", False)
+    memory = {
+        "internal_context_allowed": True,
+        "sensitivity": "normal",
+        "verbal_reference_allowed": True,
+        "explicit_detail_allowed": True,
+    }
+
+    recognised = orchestrator._apply_prompt_permissions(
+        [memory.copy()], verified=False, caller_status="RECOGNISED"
+    )[0]
+    verified = orchestrator._apply_prompt_permissions(
+        [memory.copy()], verified=True, caller_status="VERIFIED"
+    )[0]
+
+    assert recognised["may_verbalize"] is False
+    assert recognised["may_use_explicit_detail"] is False
+    assert verified["may_verbalize"] is True
+    assert verified["may_use_explicit_detail"] is True
+
+
+@pytest.mark.asyncio
+async def test_first_time_and_unknown_callers_never_gain_reference_permission(
+    monkeypatch,
+):
+    monkeypatch.setattr(orchestrator, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(orchestrator, "MEMORY_RECOGNISED_MAY_REFERENCE", True)
+
+    unknown = await orchestrator.prepare_memory_context(
+        organization_id=1,
+        call_context={},
+    )
+    first_time_db = _MemoryDB(
+        created=True,
+        memories=[
+            {
+                "memory_type": "preference",
+                "memory_text": "Prefers mornings",
+                "sensitivity": "normal",
+                "internal_context_allowed": True,
+                "verbal_reference_allowed": True,
+                "explicit_detail_allowed": True,
+            }
+        ],
+    )
+    monkeypatch.setattr(orchestrator, "db_client", first_time_db)
+    first_time = await orchestrator.prepare_memory_context(
+        organization_id=1,
+        call_context={"caller_number": "caller-first-time"},
+    )
+
+    assert unknown["relevant_memories"] == []
+    assert first_time["caller_status"] == "FIRST_TIME"
+    assert first_time["relevant_memories"] == []
+
+
+@pytest.mark.asyncio
 async def test_memory_permission_denial_returns_no_context(monkeypatch):
     fake_db = _MemoryDB(
         created=False,

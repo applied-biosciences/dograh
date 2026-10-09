@@ -130,12 +130,16 @@ curl -o docker-compose.yaml https://raw.githubusercontent.com/dograh-hq/dograh/m
 
 ## CALMOS / Sakinah Scenario Console
 
-CALMOS Connect v1.47.0.29 includes the Sakinah Scenario Console at `/sakinah` and
+CALMOS Connect v1.47.0.30 includes the Sakinah Scenario Console at `/sakinah` and
 its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
 
 - The v1.47.0.29 amendment registers the supplied `Sakinah Decision Agent v3.1`
   and `Sakinah Decision Agent v4.1` definitions, preserving the existing memory
   workflow allow-list and the current server-side persistence behavior.
+- v1.47.0.30 adds the disabled-by-default `MEMORY_RECOGNISED_MAY_REFERENCE`
+  safety switch. When explicitly enabled after testing, recognised callers may
+  receive only low/normal-sensitivity memories that are marked for verbal
+  reference; explicit historic detail remains restricted to verified access.
 
 - Durable Agent Runs/Call History records for active and completed calls,
   including transcripts, utterances, scores, events, latency, and provider

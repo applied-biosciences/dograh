@@ -171,6 +171,28 @@ async def _update_usage_info_with_qa_tokens(
         logger.error(f"Failed to update usage_info with QA tokens: {e}")
 
 
+def _register_org_langfuse_credentials_safely(
+    *, organization_id: int, langfuse_config: dict[str, Any]
+) -> None:
+    """Keep tracing setup failures from blocking post-call integrations."""
+    try:
+        register_org_langfuse_credentials(
+            org_id=organization_id,
+            host=langfuse_config.get("host"),
+            public_key=langfuse_config.get("public_key"),
+            secret_key=langfuse_config.get("secret_key"),
+            project_id=langfuse_config.get("project_id"),
+            traces_public=langfuse_config.get("traces_public", False),
+        )
+    except Exception as exc:  # noqa: BLE001 - tracing is optional enrichment
+        logger.warning(
+            "Langfuse tracing setup failed for organization {}; continuing "
+            "integrations without org-specific tracing ({})",
+            organization_id,
+            type(exc).__name__,
+        )
+
+
 async def run_integrations_post_workflow_run(_ctx, workflow_run_id: int):
     """
     Run integrations after a workflow run completes.
@@ -207,13 +229,9 @@ async def run_integrations_post_workflow_run(_ctx, workflow_run_id: int):
             OrganizationConfigurationKey.LANGFUSE_CREDENTIALS.value,
         )
         if langfuse_config:
-            register_org_langfuse_credentials(
-                org_id=organization_id,
-                host=langfuse_config.get("host"),
-                public_key=langfuse_config.get("public_key"),
-                secret_key=langfuse_config.get("secret_key"),
-                project_id=langfuse_config.get("project_id"),
-                traces_public=langfuse_config.get("traces_public", False),
+            _register_org_langfuse_credentials_safely(
+                organization_id=organization_id,
+                langfuse_config=langfuse_config,
             )
 
         # Step 2: Get workflow definition from the run's pinned version
