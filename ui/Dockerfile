@@ -32,6 +32,9 @@ COPY ui/components.json ./
 COPY ui/sentry.edge.config.ts ./
 COPY ui/sentry.server.config.ts ./
 COPY ui/postcss.config.mjs ./
+# Build-time IPv4 shim for hosts with black-holed IPv6 (see file header).
+# Inert unless referenced via the NODE_OPTIONS build arg.
+COPY ui/force-ipv4.cjs ./
 COPY ui/public ./public
 COPY ui/src ./src
 

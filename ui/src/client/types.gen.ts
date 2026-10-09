@@ -360,6 +360,129 @@ export type AutoscaleMetricResponse = {
 };
 
 /**
+ * AvatarConfigResponse
+ *
+ * Whether the avatar feature is configured, and in which driving mode.
+ */
+export type AvatarConfigResponse = {
+    /**
+     * Enabled
+     */
+    enabled: boolean;
+    /**
+     * Mode
+     */
+    mode: string;
+};
+
+/**
+ * AvatarConfigurationDefaults
+ *
+ * Per-workflow SpatialReal avatar settings.
+ *
+ * ``avatar_id`` and ``mode`` fall back to the deployment-wide SPATIALREAL_*
+ * env defaults when unset; ``enabled`` opts the workflow into the avatar.
+ */
+export type AvatarConfigurationDefaults = {
+    /**
+     * Enabled
+     */
+    enabled?: boolean;
+    /**
+     * Avatar Id
+     */
+    avatar_id?: string | null;
+    /**
+     * Mode
+     */
+    mode?: 'sdk' | 'host' | null;
+};
+
+/**
+ * AvatarLibraryAddRequest
+ *
+ * Import one avatar by its SpatialReal Studio id.
+ */
+export type AvatarLibraryAddRequest = {
+    /**
+     * Avatar Id
+     */
+    avatar_id: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Image Url
+     */
+    image_url?: string | null;
+};
+
+/**
+ * AvatarLibraryEntry
+ *
+ * One selectable avatar: a SpatialReal character id plus a display name.
+ */
+export type AvatarLibraryEntry = {
+    /**
+     * Avatar Id
+     */
+    avatar_id: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Builtin
+     */
+    builtin?: boolean;
+    /**
+     * Image Url
+     */
+    image_url?: string | null;
+};
+
+/**
+ * AvatarLibraryResponse
+ *
+ * The org's avatar library and the deployment-default avatar id.
+ */
+export type AvatarLibraryResponse = {
+    /**
+     * Avatars
+     */
+    avatars: Array<AvatarLibraryEntry>;
+    /**
+     * Default Avatar Id
+     */
+    default_avatar_id: string;
+};
+
+/**
+ * AvatarSessionResponse
+ *
+ * Client-side configuration for an AvatarKit SDK-mode session.
+ */
+export type AvatarSessionResponse = {
+    /**
+     * App Id
+     */
+    app_id: string;
+    /**
+     * Avatar Id
+     */
+    avatar_id: string;
+    /**
+     * Session Token
+     */
+    session_token: string;
+    /**
+     * Expires At
+     */
+    expires_at: number;
+};
+
+/**
  * Azure OpenAI
  */
 export type AzureLlmService = {
@@ -935,6 +1058,38 @@ export type CallDispositionCodes = {
      * Disposition Codes
      */
     disposition_codes?: Array<string>;
+};
+
+/**
+ * CallReplayResponse
+ */
+export type CallReplayResponse = {
+    /**
+     * Call Id
+     */
+    call_id: string;
+    /**
+     * Agent Run Id
+     */
+    agent_run_id: number;
+    /**
+     * Recording Signed Url
+     */
+    recording_signed_url?: string | null;
+    /**
+     * Expires In
+     */
+    expires_in: number;
+    /**
+     * Transcript
+     */
+    transcript?: string | null;
+    /**
+     * Utterances
+     */
+    utterances?: Array<{
+        [key: string]: unknown;
+    }>;
 };
 
 /**
@@ -1778,9 +1933,13 @@ export type CreateSessionRequest = {
      * Name
      */
     name?: string | null;
-    /** Scenario identifier from the scenario library */
+    /**
+     * Scenario Id
+     */
     scenario_id?: string | null;
-    /** Scenario title from the scenario library */
+    /**
+     * Scenario Name
+     */
     scenario_name?: string | null;
 };
 
@@ -1800,7 +1959,9 @@ export type CreateSessionResponse = {
      * Workflow Run Id
      */
     workflow_run_id: number;
-    /** Canonical internal call identifier */
+    /**
+     * Call Id
+     */
     call_id: string;
     /**
      * Started At
@@ -1922,7 +2083,9 @@ export type CreateWorkflowRunResponse = {
      * Id
      */
     id: number;
-    /** Canonical internal call identifier */
+    /**
+     * Call Id
+     */
     call_id: string;
     /**
      * Workflow Id
@@ -2758,6 +2921,10 @@ export type EmbedTokenResponse = {
      * Embed Script
      */
     embed_script: string;
+    /**
+     * Embed Iframe
+     */
+    embed_iframe: string;
 };
 
 /**
@@ -5826,9 +5993,13 @@ export type ScenarioResponse = {
      * Title
      */
     title?: string;
-    /** Category */
+    /**
+     * Category
+     */
     category?: string;
-    /** Search tags */
+    /**
+     * Tags
+     */
     tags?: Array<string>;
     /**
      * Mode
@@ -5916,9 +6087,13 @@ export type ScenarioWriteRequest = {
      * Title
      */
     title?: string;
-    /** Category */
+    /**
+     * Category
+     */
     category?: string;
-    /** Search tags */
+    /**
+     * Tags
+     */
     tags?: Array<string>;
     /**
      * Mode
@@ -6362,9 +6537,13 @@ export type StartSimulationRequest = {
      * Scenario
      */
     scenario: string;
-    /** Scenario identifier from the scenario library */
+    /**
+     * Scenario Id
+     */
     scenario_id?: string | null;
-    /** Scenario title from the scenario library */
+    /**
+     * Scenario Name
+     */
     scenario_name?: string | null;
     /**
      * Max Duration Seconds
@@ -8087,6 +8266,7 @@ export type WorkflowConfigurationDefaults = {
      * External Pbx Lead Headers
      */
     external_pbx_lead_headers?: Array<string>;
+    avatar_configuration?: AvatarConfigurationDefaults;
     [key: string]: unknown;
 };
 
@@ -8379,6 +8559,98 @@ export type WorkflowRunResponseSchema = {
     annotations?: {
         [key: string]: unknown;
     } | null;
+    /**
+     * Call Id
+     */
+    call_id?: string | null;
+    /**
+     * Scenario Id
+     */
+    scenario_id?: string | null;
+    /**
+     * Scenario Name
+     */
+    scenario_name?: string | null;
+    /**
+     * Service User Id
+     */
+    service_user_id?: string | null;
+    /**
+     * Caller Identifier
+     */
+    caller_identifier?: string | null;
+    /**
+     * Telephone Number
+     */
+    telephone_number?: string | null;
+    /**
+     * Direction
+     */
+    direction?: string | null;
+    /**
+     * Started At
+     */
+    started_at?: string | null;
+    /**
+     * Connected At
+     */
+    connected_at?: string | null;
+    /**
+     * Ended At
+     */
+    ended_at?: string | null;
+    /**
+     * Duration Seconds
+     */
+    duration_seconds?: number | null;
+    /**
+     * Call Status
+     */
+    call_status?: string | null;
+    /**
+     * Telephony Provider
+     */
+    telephony_provider?: string | null;
+    /**
+     * Model Provider
+     */
+    model_provider?: string | null;
+    /**
+     * Stt Provider
+     */
+    stt_provider?: string | null;
+    /**
+     * Tts Provider
+     */
+    tts_provider?: string | null;
+    /**
+     * Avatar Provider
+     */
+    avatar_provider?: string | null;
+    /**
+     * Recording Object Key
+     */
+    recording_object_key?: string | null;
+    /**
+     * Recording Duration Seconds
+     */
+    recording_duration_seconds?: number | null;
+    /**
+     * Recording Format
+     */
+    recording_format?: string | null;
+    /**
+     * Recording Size Bytes
+     */
+    recording_size_bytes?: number | null;
+    /**
+     * Full Transcript
+     */
+    full_transcript?: string | null;
+    /**
+     * Termination Reason
+     */
+    termination_reason?: string | null;
 };
 
 /**
@@ -8561,22 +8833,61 @@ export type WorkflowRunUsageResponse = {
     gathered_context?: {
         [key: string]: unknown;
     } | null;
+    /**
+     * Call Id
+     */
     call_id?: string | null;
+    /**
+     * Agent Run Id
+     */
     agent_run_id?: number | null;
+    /**
+     * Service User Id
+     */
     service_user_id?: string | null;
+    /**
+     * Service User Label
+     */
     service_user_label?: string | null;
+    /**
+     * Scenario Id
+     */
     scenario_id?: string | null;
+    /**
+     * Scenario Name
+     */
     scenario_name?: string | null;
+    /**
+     * Call Status
+     */
     call_status?: string | null;
+    /**
+     * Started At
+     */
     started_at?: string | null;
+    /**
+     * Connected At
+     */
     connected_at?: string | null;
+    /**
+     * Ended At
+     */
     ended_at?: string | null;
+    /**
+     * Calm Score
+     */
     calm_score?: {
         [key: string]: unknown;
     } | null;
+    /**
+     * Safety Score
+     */
     safety_score?: {
         [key: string]: unknown;
     } | null;
+    /**
+     * Clinical Evaluation
+     */
     clinical_evaluation?: {
         [key: string]: unknown;
     } | null;
@@ -11623,6 +11934,55 @@ export type DownloadCampaignReportApiV1CampaignCampaignIdReportGetResponses = {
     200: unknown;
 };
 
+export type GetCallReplayApiV1CallHistoryCallIdReplayGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path: {
+        /**
+         * Call Id
+         */
+        call_id: string;
+    };
+    query?: {
+        /**
+         * Expires In
+         */
+        expires_in?: number;
+    };
+    url: '/api/v1/call-history/{call_id}/replay';
+};
+
+export type GetCallReplayApiV1CallHistoryCallIdReplayGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetCallReplayApiV1CallHistoryCallIdReplayGetError = GetCallReplayApiV1CallHistoryCallIdReplayGetErrors[keyof GetCallReplayApiV1CallHistoryCallIdReplayGetErrors];
+
+export type GetCallReplayApiV1CallHistoryCallIdReplayGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: CallReplayResponse;
+};
+
+export type GetCallReplayApiV1CallHistoryCallIdReplayGetResponse = GetCallReplayApiV1CallHistoryCallIdReplayGetResponses[keyof GetCallReplayApiV1CallHistoryCallIdReplayGetResponses];
+
 export type ListCredentialsApiV1CredentialsGetData = {
     body?: never;
     headers?: {
@@ -14268,7 +14628,9 @@ export type ListScenariosApiV1SakinahScenariosGetData = {
     };
     path?: never;
     query?: {
-        /** Case-insensitive partial scenario search */
+        /**
+         * Search
+         */
         search?: string | null;
     };
     url: '/api/v1/sakinah/scenarios';
@@ -14833,6 +15195,172 @@ export type GetTurnCredentialsApiV1TurnCredentialsGetResponses = {
 
 export type GetTurnCredentialsApiV1TurnCredentialsGetResponse = GetTurnCredentialsApiV1TurnCredentialsGetResponses[keyof GetTurnCredentialsApiV1TurnCredentialsGetResponses];
 
+export type GetAvatarConfigApiV1AvatarConfigGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: {
+        /**
+         * Workflow Run Id
+         */
+        workflow_run_id?: number | null;
+    };
+    url: '/api/v1/avatar/config';
+};
+
+export type GetAvatarConfigApiV1AvatarConfigGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetAvatarConfigApiV1AvatarConfigGetError = GetAvatarConfigApiV1AvatarConfigGetErrors[keyof GetAvatarConfigApiV1AvatarConfigGetErrors];
+
+export type GetAvatarConfigApiV1AvatarConfigGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: AvatarConfigResponse;
+};
+
+export type GetAvatarConfigApiV1AvatarConfigGetResponse = GetAvatarConfigApiV1AvatarConfigGetResponses[keyof GetAvatarConfigApiV1AvatarConfigGetResponses];
+
+export type CreateAvatarSessionApiV1AvatarSessionPostData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: {
+        /**
+         * Workflow Run Id
+         */
+        workflow_run_id?: number | null;
+    };
+    url: '/api/v1/avatar/session';
+};
+
+export type CreateAvatarSessionApiV1AvatarSessionPostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type CreateAvatarSessionApiV1AvatarSessionPostError = CreateAvatarSessionApiV1AvatarSessionPostErrors[keyof CreateAvatarSessionApiV1AvatarSessionPostErrors];
+
+export type CreateAvatarSessionApiV1AvatarSessionPostResponses = {
+    /**
+     * Successful Response
+     */
+    200: AvatarSessionResponse;
+};
+
+export type CreateAvatarSessionApiV1AvatarSessionPostResponse = CreateAvatarSessionApiV1AvatarSessionPostResponses[keyof CreateAvatarSessionApiV1AvatarSessionPostResponses];
+
+export type GetAvatarLibraryApiV1AvatarLibraryGetData = {
+    body?: never;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/avatar/library';
+};
+
+export type GetAvatarLibraryApiV1AvatarLibraryGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetAvatarLibraryApiV1AvatarLibraryGetError = GetAvatarLibraryApiV1AvatarLibraryGetErrors[keyof GetAvatarLibraryApiV1AvatarLibraryGetErrors];
+
+export type GetAvatarLibraryApiV1AvatarLibraryGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: AvatarLibraryResponse;
+};
+
+export type GetAvatarLibraryApiV1AvatarLibraryGetResponse = GetAvatarLibraryApiV1AvatarLibraryGetResponses[keyof GetAvatarLibraryApiV1AvatarLibraryGetResponses];
+
+export type AddAvatarToLibraryApiV1AvatarLibraryPostData = {
+    body: AvatarLibraryAddRequest;
+    headers?: {
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Api-Key
+         */
+        'X-API-Key'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/avatar/library';
+};
+
+export type AddAvatarToLibraryApiV1AvatarLibraryPostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type AddAvatarToLibraryApiV1AvatarLibraryPostError = AddAvatarToLibraryApiV1AvatarLibraryPostErrors[keyof AddAvatarToLibraryApiV1AvatarLibraryPostErrors];
+
+export type AddAvatarToLibraryApiV1AvatarLibraryPostResponses = {
+    /**
+     * Successful Response
+     */
+    200: AvatarLibraryResponse;
+};
+
+export type AddAvatarToLibraryApiV1AvatarLibraryPostResponse = AddAvatarToLibraryApiV1AvatarLibraryPostResponses[keyof AddAvatarToLibraryApiV1AvatarLibraryPostResponses];
+
 export type OptionsInitApiV1PublicEmbedInitOptionsData = {
     body?: never;
     path?: never;
@@ -15009,6 +15537,134 @@ export type OptionsTurnCredentialsApiV1PublicEmbedTurnCredentialsSessionTokenOpt
 export type OptionsTurnCredentialsApiV1PublicEmbedTurnCredentialsSessionTokenOptionsError = OptionsTurnCredentialsApiV1PublicEmbedTurnCredentialsSessionTokenOptionsErrors[keyof OptionsTurnCredentialsApiV1PublicEmbedTurnCredentialsSessionTokenOptionsErrors];
 
 export type OptionsTurnCredentialsApiV1PublicEmbedTurnCredentialsSessionTokenOptionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type GetPublicAvatarConfigApiV1PublicEmbedAvatarConfigSessionTokenGetData = {
+    body?: never;
+    path: {
+        /**
+         * Session Token
+         */
+        session_token: string;
+    };
+    query?: never;
+    url: '/api/v1/public/embed/avatar/config/{session_token}';
+};
+
+export type GetPublicAvatarConfigApiV1PublicEmbedAvatarConfigSessionTokenGetErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type GetPublicAvatarConfigApiV1PublicEmbedAvatarConfigSessionTokenGetError = GetPublicAvatarConfigApiV1PublicEmbedAvatarConfigSessionTokenGetErrors[keyof GetPublicAvatarConfigApiV1PublicEmbedAvatarConfigSessionTokenGetErrors];
+
+export type GetPublicAvatarConfigApiV1PublicEmbedAvatarConfigSessionTokenGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type OptionsPublicAvatarConfigApiV1PublicEmbedAvatarConfigSessionTokenOptionsData = {
+    body?: never;
+    path: {
+        /**
+         * Session Token
+         */
+        session_token: string;
+    };
+    query?: never;
+    url: '/api/v1/public/embed/avatar/config/{session_token}';
+};
+
+export type OptionsPublicAvatarConfigApiV1PublicEmbedAvatarConfigSessionTokenOptionsErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type OptionsPublicAvatarConfigApiV1PublicEmbedAvatarConfigSessionTokenOptionsError = OptionsPublicAvatarConfigApiV1PublicEmbedAvatarConfigSessionTokenOptionsErrors[keyof OptionsPublicAvatarConfigApiV1PublicEmbedAvatarConfigSessionTokenOptionsErrors];
+
+export type OptionsPublicAvatarConfigApiV1PublicEmbedAvatarConfigSessionTokenOptionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type OptionsPublicAvatarSessionApiV1PublicEmbedAvatarSessionSessionTokenOptionsData = {
+    body?: never;
+    path: {
+        /**
+         * Session Token
+         */
+        session_token: string;
+    };
+    query?: never;
+    url: '/api/v1/public/embed/avatar/session/{session_token}';
+};
+
+export type OptionsPublicAvatarSessionApiV1PublicEmbedAvatarSessionSessionTokenOptionsErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type OptionsPublicAvatarSessionApiV1PublicEmbedAvatarSessionSessionTokenOptionsError = OptionsPublicAvatarSessionApiV1PublicEmbedAvatarSessionSessionTokenOptionsErrors[keyof OptionsPublicAvatarSessionApiV1PublicEmbedAvatarSessionSessionTokenOptionsErrors];
+
+export type OptionsPublicAvatarSessionApiV1PublicEmbedAvatarSessionSessionTokenOptionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type CreatePublicAvatarSessionApiV1PublicEmbedAvatarSessionSessionTokenPostData = {
+    body?: never;
+    path: {
+        /**
+         * Session Token
+         */
+        session_token: string;
+    };
+    query?: never;
+    url: '/api/v1/public/embed/avatar/session/{session_token}';
+};
+
+export type CreatePublicAvatarSessionApiV1PublicEmbedAvatarSessionSessionTokenPostErrors = {
+    /**
+     * Not found
+     */
+    404: unknown;
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type CreatePublicAvatarSessionApiV1PublicEmbedAvatarSessionSessionTokenPostError = CreatePublicAvatarSessionApiV1PublicEmbedAvatarSessionSessionTokenPostErrors[keyof CreatePublicAvatarSessionApiV1PublicEmbedAvatarSessionSessionTokenPostErrors];
+
+export type CreatePublicAvatarSessionApiV1PublicEmbedAvatarSessionSessionTokenPostResponses = {
     /**
      * Successful Response
      */

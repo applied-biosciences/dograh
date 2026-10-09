@@ -11,16 +11,18 @@ POST {console_endpoint}/session-tokens with header X-Api-Key and body
 """
 
 import time
+import uuid
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from api.constants import (
     SPATIALREAL_API_KEY,
     SPATIALREAL_APP_ID,
     SPATIALREAL_AVATAR_ID,
+    SPATIALREAL_CHARACTER_ENDPOINT,
     SPATIALREAL_CONSOLE_ENDPOINT,
     SPATIALREAL_TOKEN_TTL,
 )
@@ -32,6 +34,17 @@ from api.services.avatar import resolve_avatar_settings
 router = APIRouter(prefix="/avatar", tags=["avatar"])
 
 SESSION_TOKEN_PATH = "/session-tokens"
+
+# Org-configuration key holding the user-imported avatars. Built-in avatars
+# live in code (below) and are merged in on read, so correcting a built-in id
+# is a code change and never requires DB surgery.
+AVATAR_LIBRARY_KEY = "avatar_library"
+
+BUILTIN_AVATARS: list[dict] = [
+    {"avatar_id": "9ac36877-6a37-44c0-8f74-f682752b1346", "name": "Saudi Male"},
+    {"avatar_id": "d5211078-994b-4346-91e2-fa9c77b71bbe", "name": "British Female"},
+    {"avatar_id": "02f297a8-8bc0-49a5-b690-1970183dc839", "name": "Saudi Female"},
+]
 
 
 class AvatarSessionResponse(BaseModel):
@@ -48,6 +61,44 @@ class AvatarConfigResponse(BaseModel):
 
     enabled: bool
     mode: str  # "sdk" | "host" | "off"
+
+
+class AvatarLibraryEntry(BaseModel):
+    """One selectable avatar: a SpatialReal character id plus a display name."""
+
+    avatar_id: str
+    name: str
+    builtin: bool = False
+    image_url: str | None = None
+
+
+class AvatarLibraryResponse(BaseModel):
+    """The org's avatar library and the deployment-default avatar id."""
+
+    avatars: list[AvatarLibraryEntry]
+    default_avatar_id: str
+
+
+class AvatarLibraryAddRequest(BaseModel):
+    """Import one avatar by its SpatialReal Studio id."""
+
+    avatar_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=80)
+    image_url: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("avatar_id", "name", "image_url", mode="before")
+    @classmethod
+    def _strip(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("image_url")
+    @classmethod
+    def _http_only(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("Image URL must start with http:// or https://")
+        return value
 
 
 def _is_configured() -> bool:
@@ -107,6 +158,128 @@ async def create_avatar_session(
         avatar_id=settings["avatar_id"] or SPATIALREAL_AVATAR_ID,
         session_token=session_token,
         expires_at=expires_at,
+    )
+
+
+def _merged_library(stored: list | None) -> list[AvatarLibraryEntry]:
+    """Built-ins first, then user imports, de-duplicated by avatar id."""
+    entries = [AvatarLibraryEntry(**item, builtin=True) for item in BUILTIN_AVATARS]
+    seen = {entry.avatar_id for entry in entries}
+    for item in stored or []:
+        avatar_id = item.get("avatar_id")
+        if not avatar_id or avatar_id in seen:
+            continue
+        seen.add(avatar_id)
+        entries.append(
+            AvatarLibraryEntry(
+                avatar_id=avatar_id,
+                name=item.get("name") or avatar_id,
+                image_url=item.get("image_url"),
+            )
+        )
+    return entries
+
+
+async def _verify_avatar_exists(avatar_id: str) -> None:
+    """Check the id against SpatialReal's public character endpoint.
+
+    Raises HTTPException with a user-facing message when the id is malformed,
+    unknown to SpatialReal, or the engine is unreachable.
+    """
+    try:
+        uuid.UUID(avatar_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "That doesn't look like an avatar ID — use the copy button on "
+                "the avatar card in SpatialReal Studio."
+            ),
+        ) from None
+
+    endpoint = f"{SPATIALREAL_CHARACTER_ENDPOINT.rstrip('/')}/{avatar_id}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(endpoint)
+        data = response.json()
+    except (httpx.HTTPError, ValueError) as e:
+        logger.error(f"SpatialReal character lookup failed for {avatar_id}: {e}")
+        raise HTTPException(
+            status_code=502, detail="Could not reach SpatialReal to verify the avatar ID"
+        ) from e
+
+    # SpatialReal reports failures in an `errors` array (HTTP status is not
+    # reliable); a valid character always carries its characterId.
+    if data.get("errors") or not data.get("characterId"):
+        logger.info(
+            f"SpatialReal rejected avatar id {avatar_id}: {str(data)[:300]}"
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "SpatialReal has no avatar with this ID. Copy the full ID from "
+                "SpatialReal Studio and make sure the avatar shows Completed."
+            ),
+        )
+
+
+@router.get("/library", response_model=AvatarLibraryResponse)
+async def get_avatar_library(
+    user: UserModel = Depends(get_user),
+) -> AvatarLibraryResponse:
+    """List the org's selectable avatars (built-ins plus imports)."""
+    stored = await db_client.get_configuration_value(
+        user.selected_organization_id, AVATAR_LIBRARY_KEY, default=[]
+    )
+    return AvatarLibraryResponse(
+        avatars=_merged_library(stored),
+        default_avatar_id=SPATIALREAL_AVATAR_ID,
+    )
+
+
+@router.post("/library", response_model=AvatarLibraryResponse)
+async def add_avatar_to_library(
+    request: AvatarLibraryAddRequest,
+    user: UserModel = Depends(get_user),
+) -> AvatarLibraryResponse:
+    """Import an avatar by SpatialReal id after verifying it exists.
+
+    Re-importing an id that was already user-added updates its name/image
+    (no re-verification); built-in ids are fixed and return unchanged.
+    """
+    organization_id = user.selected_organization_id
+    stored = await db_client.get_configuration_value(
+        organization_id, AVATAR_LIBRARY_KEY, default=[]
+    )
+
+    if any(b["avatar_id"] == request.avatar_id for b in BUILTIN_AVATARS):
+        return AvatarLibraryResponse(
+            avatars=_merged_library(stored),
+            default_avatar_id=SPATIALREAL_AVATAR_ID,
+        )
+
+    entry: dict = {"avatar_id": request.avatar_id, "name": request.name}
+    if request.image_url:
+        entry["image_url"] = request.image_url
+
+    existing = [item for item in stored or [] if item.get("avatar_id")]
+    if any(item["avatar_id"] == request.avatar_id for item in existing):
+        updated = [
+            entry if item["avatar_id"] == request.avatar_id else item
+            for item in existing
+        ]
+    else:
+        await _verify_avatar_exists(request.avatar_id)
+        updated = existing + [entry]
+    await db_client.upsert_configuration(
+        organization_id, AVATAR_LIBRARY_KEY, updated
+    )
+    logger.info(
+        f"Avatar {request.avatar_id} ({request.name!r}) added to library of "
+        f"org {organization_id} by user {user.id}"
+    )
+    return AvatarLibraryResponse(
+        avatars=_merged_library(updated), default_avatar_id=SPATIALREAL_AVATAR_ID
     )
 
 

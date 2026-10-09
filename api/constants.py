@@ -313,6 +313,13 @@ SPATIALREAL_INGRESS_ENDPOINT = os.getenv(
     "SPATIALREAL_INGRESS_ENDPOINT",
     f"wss://api.{SPATIALREAL_REGION}.spatialwalk.cloud/v2/driveningress",
 )
+# Public (unauthenticated) character metadata endpoint, used to verify an
+# avatar id exists before adding it to the org's avatar library. The AvatarKit
+# SDK resolves characters through the region-agnostic `intl` host.
+SPATIALREAL_CHARACTER_ENDPOINT = os.getenv(
+    "SPATIALREAL_CHARACTER_ENDPOINT",
+    "https://api.intl.spatialwalk.cloud/v2/character",
+)
 # Max concurrent host-mode avatar sessions. Beyond the cap new runs proceed
 # audio-only (the avatar is refused, never the call).
 SPATIALREAL_MAX_SESSIONS = int(os.getenv("SPATIALREAL_MAX_SESSIONS", "10"))

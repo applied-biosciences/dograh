@@ -24,6 +24,7 @@ import {
     AIModelConfigurationV2Editor,
     type ModelConfigurationDefaultsV2,
 } from "@/components/AIModelConfigurationV2Editor";
+import { AvatarGalleryPicker } from "@/components/avatar/AvatarGalleryPicker";
 import { FlowEdge, FlowNode } from "@/components/flow/types";
 import { LLMConfigSelector } from "@/components/LLMConfigSelector";
 import SpinLoader from "@/components/SpinLoader";
@@ -793,23 +794,16 @@ function GeneralSection({
                     {avatarConfig.enabled && (
                         <>
                             <div className="space-y-2">
-                                <Label htmlFor="avatar-id" className="text-sm">
-                                    Avatar ID
-                                </Label>
-                                <Input
-                                    id="avatar-id"
-                                    placeholder="Deployment default"
-                                    value={avatarConfig.avatar_id ?? ""}
-                                    onChange={(e) =>
+                                <Label className="text-sm">Avatar</Label>
+                                <AvatarGalleryPicker
+                                    value={avatarConfig.avatar_id ?? null}
+                                    onChange={(avatarId) =>
                                         setAvatarConfig((prev) => ({
                                             ...prev,
-                                            avatar_id: e.target.value || null,
+                                            avatar_id: avatarId,
                                         }))
                                     }
                                 />
-                                <p className="text-xs text-muted-foreground">
-                                    From SpatialReal Studio. Leave empty to use the deployment default avatar.
-                                </p>
                             </div>
                             <div className="space-y-2">
                                 <Label htmlFor="avatar-mode" className="text-sm">
