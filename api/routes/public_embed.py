@@ -596,7 +596,13 @@ EMBED_AVATAR_TOKEN_TTL = 3600  # seconds; matches the embed session's 1h expiry
 
 
 async def _resolve_avatar_settings_for_embed(session_token: str, origin: str) -> dict:
-    """Validate the embed session and resolve the workflow's avatar settings."""
+    """Validate the embed session and resolve the workflow's avatar settings.
+
+    Avatar appearance follows the workflow's LIVE configuration, not the
+    run-pinned released definition: operators change the avatar in workflow
+    settings and expect the embed to reflect it on the next page load,
+    without a release. (Agent behavior stays pinned to the run definition.)
+    """
     from api.services.avatar import resolve_avatar_settings
 
     try:
@@ -608,14 +614,22 @@ async def _resolve_avatar_settings_for_embed(session_token: str, origin: str) ->
     except EmbedSessionValidationError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
 
-    run_configs = None
-    workflow_run = await db_client.get_workflow_run(
-        embed_session.workflow_run_id,
+    configs = None
+    workflow = await db_client.get_workflow(
+        embed_token.workflow_id,
         organization_id=embed_token.organization_id,
     )
-    if workflow_run is not None and workflow_run.definition is not None:
-        run_configs = workflow_run.definition.workflow_configurations
-    return resolve_avatar_settings(run_configs)
+    if workflow is not None:
+        configs = workflow.workflow_configurations
+    else:
+        # Fall back to the run's pinned definition if the workflow row is gone.
+        workflow_run = await db_client.get_workflow_run(
+            embed_session.workflow_run_id,
+            organization_id=embed_token.organization_id,
+        )
+        if workflow_run is not None and workflow_run.definition is not None:
+            configs = workflow_run.definition.workflow_configurations
+    return resolve_avatar_settings(configs)
 
 
 @router.get("/avatar/config/{session_token}")
