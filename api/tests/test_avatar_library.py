@@ -30,7 +30,7 @@ class FakeAsyncClient:
     async def __aexit__(self, *exc):
         return False
 
-    async def get(self, url):
+    async def get(self, url, headers=None):
         FakeAsyncClient.calls.append(url)
         payload = FakeAsyncClient.payload
         return SimpleNamespace(json=lambda: payload, status_code=200)

@@ -74,16 +74,16 @@ const nextConfig: NextConfig = {
   skipTrailingSlashRedirect: true,
 };
 
-// @spatialwalk/avatarkit is ESM-only; next.config.ts is loaded as CJS and the
+// @spatialreal/web-sdk is ESM-only; next.config.ts is loaded as CJS and the
 // loader transpiles even dynamic import() to require(), so the import must be
 // constructed at runtime where the transpiler can't rewrite it.
 const importEsm = new Function("specifier", "return import(specifier)") as (
     specifier: string,
-) => Promise<{ withAvatarkit: (config: NextConfig) => NextConfig }>;
+) => Promise<{ withSpatialReal: (config: NextConfig) => NextConfig }>;
 
 export default async function config() {
-    const { withAvatarkit } = await importEsm("@spatialwalk/avatarkit/next");
-    const withAvatar = withAvatarkit(nextConfig);
+    const { withSpatialReal } = await importEsm("@spatialreal/web-sdk/next");
+    const withAvatar = withSpatialReal(nextConfig);
     // The Sentry webpack plugin instruments every module and inflates build
     // memory — set DISABLE_SENTRY=1 to skip it on memory-constrained builders
     // (e.g. Vercel Hobby) where it was causing OOM (SIGKILL) kills.

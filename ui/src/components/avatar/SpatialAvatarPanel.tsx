@@ -5,11 +5,11 @@ import { RefObject, useCallback, useEffect, useRef, useState } from 'react';
 
 import { useAppConfig } from '@/context/AppConfigContext';
 import { resolveBrowserBackendUrl } from '@/lib/apiClient';
-import { installSpatialProxy } from '@/lib/avatar/spatialProxy';
 import logger from '@/lib/logger';
 
-type AvatarKitModule = typeof import('@spatialwalk/avatarkit');
-type AvatarViewInstance = InstanceType<AvatarKitModule['AvatarView']>;
+import type { AvatarSession, HostAvatarSession } from '@spatialreal/web-sdk';
+
+type AnyAvatarSession = AvatarSession | HostAvatarSession;
 
 interface AvatarSessionInfo {
     app_id: string;
@@ -112,7 +112,7 @@ export function SpatialAvatarPanel({
 }: SpatialAvatarPanelProps) {
     const { config: appConfig } = useAppConfig();
     const containerRef = useRef<HTMLDivElement>(null);
-    const avatarViewRef = useRef<AvatarViewInstance | null>(null);
+    const avatarSessionRef = useRef<AnyAvatarSession | null>(null);
     const audioCtxRef = useRef<AudioContext | null>(null);
     const processorRef = useRef<ScriptProcessorNode | null>(null);
     const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -120,8 +120,7 @@ export function SpatialAvatarPanel({
     const wasSendingRef = useRef(false);
     const startedRef = useRef(false);
     const relayWsRef = useRef<WebSocket | null>(null);
-    const conversationIdRef = useRef<string | null>(null);
-    const kitRef = useRef<AvatarKitModule | null>(null);
+    const sessionTokenRef = useRef<string>('');
     const sessionExpiresAtRef = useRef<number>(0);
     const callStartedRef = useRef(false);
     // Keep callbacks in refs so the boot effect doesn't re-run when the parent
@@ -170,11 +169,6 @@ export function SpatialAvatarPanel({
 
         async function boot() {
             try {
-                // Route the SDK's spatialwalk.* traffic through our own domain
-                // (first-party) so ad/DNS filters can't block the avatar. Must
-                // run before the SDK is imported/initialized below.
-                installSpatialProxy();
-
                 const headers: Record<string, string> = { 'Content-Type': 'application/json' };
                 if (!publicSessionToken && accessToken) {
                     headers.Authorization = `Bearer ${accessToken}`;
@@ -215,50 +209,40 @@ export function SpatialAvatarPanel({
                 const session: AvatarSessionInfo = await sessionRes.json();
                 if (cancelled) return;
 
-                const kit = await import('@spatialwalk/avatarkit');
-                if (cancelled) return;
-                kitRef.current = kit;
+                const { SpatialReal } = await import('@spatialreal/web-sdk');
+                if (cancelled || !containerRef.current) return;
+                sessionTokenRef.current = session.session_token;
                 sessionExpiresAtRef.current = session.expires_at ?? 0;
 
-                const wantedDrivingMode =
+                // createSession() resolves once the avatar is on screen,
+                // standing still. Nothing is billed until start().
+                const sr = new SpatialReal({ appId: session.app_id });
+                const avatar: AnyAvatarSession =
                     drivingMode === 'host'
-                        ? kit.DrivingServiceMode.host
-                        : kit.DrivingServiceMode.sdk;
-                // The SDK is a singleton: if a previous boot initialized it in a
-                // different driving mode (e.g. sdk before this run's host config
-                // resolved), it must be torn down or the mode silently sticks.
-                if (
-                    kit.AvatarSDK.isInitialized &&
-                    kit.AvatarSDK.configuration?.drivingServiceMode !== wantedDrivingMode
-                ) {
-                    logger.info(
-                        `Avatar SDK driving mode change (${kit.AvatarSDK.configuration?.drivingServiceMode} -> ${wantedDrivingMode}); reinitializing`
+                        ? await sr.createSession({
+                              avatarId: session.avatar_id,
+                              credential: session.session_token,
+                              container: containerRef.current,
+                              drivingServiceMode: 'host',
+                              audioFormat: { sampleRate: TARGET_SAMPLE_RATE },
+                          })
+                        : await sr.createSession({
+                              avatarId: session.avatar_id,
+                              credential: session.session_token,
+                              container: containerRef.current,
+                              audioFormat: { sampleRate: TARGET_SAMPLE_RATE },
+                          });
+                if (cancelled) {
+                    void avatar.dispose();
+                    return;
+                }
+                avatar.on('error', ({ error }: { error: { code?: string; message?: string } }) => {
+                    logger.error(
+                        `Avatar session error: ${error?.code ?? ''} ${error?.message ?? ''}`
                     );
-                    kit.AvatarSDK.cleanup();
-                }
-                if (!kit.AvatarSDK.isInitialized) {
-                    await kit.AvatarSDK.initialize(session.app_id, {
-                        environment: kit.Environment.intl,
-                        drivingServiceMode: wantedDrivingMode,
-                        audioFormat: { channelCount: 1, sampleRate: TARGET_SAMPLE_RATE },
-                    });
-                }
-                kit.AvatarSDK.setSessionToken(session.session_token);
-                if (cancelled) return;
-
-                const avatar = await kit.AvatarManager.shared.load(
-                    session.avatar_id,
-                    (progress) => {
-                        if (!cancelled) setLoadProgress(Math.round(progress.progress ?? 0));
-                    }
-                );
-                if (cancelled || !containerRef.current) return;
-
-                const view = new kit.AvatarView(avatar, containerRef.current);
-                view.controller.onError = (err) => {
-                    logger.error(`Avatar controller error: ${JSON.stringify(err)}`);
-                };
-                avatarViewRef.current = view;
+                });
+                avatarSessionRef.current = avatar;
+                setLoadProgress(100);
                 setState('gesture');
             } catch (err) {
                 if (cancelled) return;
@@ -277,24 +261,21 @@ export function SpatialAvatarPanel({
         return () => {
             cancelled = true;
             void containerEl;
-            avatarViewRef.current?.dispose();
-            avatarViewRef.current = null;
+            void avatarSessionRef.current?.dispose();
+            avatarSessionRef.current = null;
             startedRef.current = false;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [accessToken, backendUrl, workflowRunId, publicSessionToken]);
 
     // ── Phase B: user gesture unlock → connect to driving service ──
-    // SDK mode also opens the SDK's own WebSocket via start(); in host mode
-    // the backend owns that connection, so only the audio context is needed.
+    // start() unlocks audio and connects in one call (both modes need it on
+    // the new SDK); it resolves once the session is live.
     const enableAvatar = useCallback(async () => {
-        const view = avatarViewRef.current;
-        if (!view || startedRef.current) return;
+        const avatar = avatarSessionRef.current;
+        if (!avatar || startedRef.current) return;
         try {
-            await view.controller.initializeAudioContext();
-            if (mode === 'sdk') {
-                await view.controller.start();
-            }
+            await avatar.start();
             startedRef.current = true;
             setState('ready');
             // Avatar is live and listening — NOW start the call so the very
@@ -340,7 +321,9 @@ export function SpatialAvatarPanel({
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const session: AvatarSessionInfo = await res.json();
                 sessionExpiresAtRef.current = session.expires_at ?? 0;
-                kitRef.current?.AvatarSDK.setSessionToken(session.session_token);
+                // The new SDK takes the credential per start(); keep the
+                // freshest token so a future start({credential}) can use it.
+                sessionTokenRef.current = session.session_token;
             } catch (err) {
                 logger.error(`Avatar token refresh failed: ${err}`);
             }
@@ -371,8 +354,8 @@ export function SpatialAvatarPanel({
 
         const wireSocket = (ws: WebSocket) => {
             ws.onmessage = (event) => {
-            const view = avatarViewRef.current;
-            if (!view) return;
+            const avatar = avatarSessionRef.current as HostAvatarSession | null;
+            if (!avatar) return;
             if (typeof event.data === 'string') {
                 try {
                     const control = JSON.parse(event.data);
@@ -381,7 +364,7 @@ export function SpatialAvatarPanel({
                         if (audioRef.current) audioRef.current.muted = false;
                         setState('error');
                     } else if (control.type === 'avatar-interrupted') {
-                        view.controller.interrupt();
+                        avatar.interrupt();
                     }
                 } catch {
                     // Ignore malformed control messages.
@@ -392,16 +375,12 @@ export function SpatialAvatarPanel({
             if (data.length < 2) return;
             const msgType = data[0];
             const isLast = (data[1] & 0x01) === 0x01;
-            const payload = data.subarray(2);
+            // Copy out of the framed message: the SDK wants ArrayBuffers.
+            const payload = data.slice(2).buffer;
             if (msgType === 0x01) {
-                const conversationId = view.controller.yieldAudioData(payload, isLast);
-                if (conversationId) conversationIdRef.current = conversationId;
+                avatar.yieldAudioData(payload, isLast);
             } else if (msgType === 0x02) {
-                const conversationId =
-                    conversationIdRef.current ?? view.controller.getCurrentConversationId();
-                if (conversationId) {
-                    view.controller.yieldFramesData([payload], conversationId);
-                }
+                avatar.yieldFramesData([payload]);
             }
         };
             ws.onopen = () => {
@@ -459,19 +438,19 @@ export function SpatialAvatarPanel({
                 // avoids shipping a separate AudioWorklet module file.
                 const processor = ctx.createScriptProcessor(2048, 1, 1);
                 processor.onaudioprocess = (event) => {
-                    const view = avatarViewRef.current;
-                    if (!view) return;
+                    const avatar = avatarSessionRef.current as AvatarSession | null;
+                    if (!avatar) return;
                     if (botSpeakingRef.current) {
                         const chunk = toPCM16(
                             event.inputBuffer.getChannelData(0),
                             ctx.sampleRate
                         );
-                        view.controller.send(chunk, false);
+                        avatar.send(chunk);
                         wasSendingRef.current = true;
                     } else if (wasSendingRef.current) {
                         // Bot turn ended — close the round so the avatar
                         // finishes remaining animation and returns to idle.
-                        view.controller.send(new ArrayBuffer(0), true);
+                        avatar.send(new ArrayBuffer(0), true);
                         wasSendingRef.current = false;
                     }
                 };
@@ -509,7 +488,10 @@ export function SpatialAvatarPanel({
             cancelled = true;
             if (pollTimer) clearTimeout(pollTimer);
             if (wasSendingRef.current) {
-                avatarViewRef.current?.controller.send(new ArrayBuffer(0), true);
+                (avatarSessionRef.current as AvatarSession | null)?.send(
+                    new ArrayBuffer(0),
+                    true
+                );
                 wasSendingRef.current = false;
             }
             processorRef.current?.disconnect();

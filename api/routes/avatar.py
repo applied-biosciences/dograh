@@ -21,9 +21,9 @@ from pydantic import BaseModel, Field, field_validator
 from api.constants import (
     SPATIALREAL_API_KEY,
     SPATIALREAL_APP_ID,
+    SPATIALREAL_AUTH_ENDPOINT,
     SPATIALREAL_AVATAR_ID,
     SPATIALREAL_CHARACTER_ENDPOINT,
-    SPATIALREAL_CONSOLE_ENDPOINT,
     SPATIALREAL_TOKEN_TTL,
 )
 from api.db import db_client
@@ -32,8 +32,6 @@ from api.services.auth.depends import get_user
 from api.services.avatar import resolve_avatar_settings
 
 router = APIRouter(prefix="/avatar", tags=["avatar"])
-
-SESSION_TOKEN_PATH = "/session-tokens"
 
 # Org-configuration key holding the user-imported avatars. Built-in avatars
 # live in code (below) and are merged in on read, so correcting a built-in id
@@ -161,6 +159,18 @@ async def create_avatar_session(
     )
 
 
+def _character_payload_ok(data: object) -> bool:
+    """A valid character payload has an id and no error field.
+
+    Accepts both API generations: the legacy spatialwalk shape
+    (``characterId`` / ``errors`` array) and the spatialreal shape
+    (``character_id`` / ``error`` string). HTTP status is not reliable.
+    """
+    if not isinstance(data, dict) or data.get("errors") or data.get("error"):
+        return False
+    return bool(data.get("characterId") or data.get("character_id"))
+
+
 def _load_store(raw: object) -> tuple[list[dict], set[str]]:
     """Normalize the stored config value.
 
@@ -225,7 +235,9 @@ async def _verify_avatar_exists(avatar_id: str) -> None:
     endpoint = f"{SPATIALREAL_CHARACTER_ENDPOINT.rstrip('/')}/{avatar_id}"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(endpoint)
+            response = await client.get(
+                endpoint, headers={"X-API-KEY": SPATIALREAL_API_KEY}
+            )
         data = response.json()
     except (httpx.HTTPError, ValueError) as e:
         logger.error(f"SpatialReal character lookup failed for {avatar_id}: {e}")
@@ -233,9 +245,7 @@ async def _verify_avatar_exists(avatar_id: str) -> None:
             status_code=502, detail="Could not reach SpatialReal to verify the avatar ID"
         ) from e
 
-    # SpatialReal reports failures in an `errors` array (HTTP status is not
-    # reliable); a valid character always carries its characterId.
-    if data.get("errors") or not data.get("characterId"):
+    if not _character_payload_ok(data):
         logger.info(
             f"SpatialReal rejected avatar id {avatar_id}: {str(data)[:300]}"
         )
@@ -274,9 +284,11 @@ async def resolve_servable_avatar_id(avatar_id: str | None) -> str:
         endpoint = f"{SPATIALREAL_CHARACTER_ENDPOINT.rstrip('/')}/{candidate}"
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(endpoint)
+                response = await client.get(
+                    endpoint, headers={"X-API-KEY": SPATIALREAL_API_KEY}
+                )
             data = response.json()
-            exists = bool(data.get("characterId")) and not data.get("errors")
+            exists = _character_payload_ok(data)
         except (httpx.HTTPError, ValueError):
             # Can't verify — serve the configured id rather than silently
             # overriding the operator's choice on a transient failure.
@@ -405,15 +417,13 @@ async def mint_spatialreal_token(expires_at: int) -> str:
     Raises HTTPException (502) on any exchange failure; shared by the
     authenticated route above and the public embed avatar endpoints.
     """
-    endpoint = SPATIALREAL_CONSOLE_ENDPOINT.rstrip("/") + SESSION_TOKEN_PATH
-
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
-                endpoint,
-                json={"expireAt": expires_at},
+                SPATIALREAL_AUTH_ENDPOINT,
+                json={"expire_at": expires_at},
                 headers={
-                    "X-Api-Key": SPATIALREAL_API_KEY,
+                    "X-API-KEY": SPATIALREAL_API_KEY,
                     "Content-Type": "application/json",
                 },
             )
@@ -433,8 +443,8 @@ async def mint_spatialreal_token(expires_at: int) -> str:
         )
 
     data = response.json()
-    session_token = data.get("sessionToken")
-    if not session_token or data.get("errors"):
+    session_token = data.get("session_token")
+    if not session_token or data.get("errors") or data.get("error"):
         logger.error(f"SpatialReal session token response invalid: {str(data)[:500]}")
         raise HTTPException(
             status_code=502, detail="Avatar engine returned invalid token response"

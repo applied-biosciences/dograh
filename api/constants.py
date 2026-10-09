@@ -303,6 +303,12 @@ SPATIALREAL_CONSOLE_ENDPOINT = os.getenv(
     "SPATIALREAL_CONSOLE_ENDPOINT",
     f"https://console.{SPATIALREAL_REGION}.spatialwalk.cloud/v1/console",
 )
+# New-platform (spatialreal.ai) session-token endpoint. One address for every
+# region; exchanges X-API-KEY for {"session_token": ...}.
+SPATIALREAL_AUTH_ENDPOINT = os.getenv(
+    "SPATIALREAL_AUTH_ENDPOINT",
+    "https://api.spatialreal.com/v1/auth/session-token",
+)
 # Session tokens are capped at 24h by SpatialReal; default to 12h.
 SPATIALREAL_TOKEN_TTL = int(os.getenv("SPATIALREAL_TOKEN_TTL", "43200"))
 # Avatar driving mode: "sdk" (browser streams audio to SpatialReal directly),
@@ -313,12 +319,12 @@ SPATIALREAL_INGRESS_ENDPOINT = os.getenv(
     "SPATIALREAL_INGRESS_ENDPOINT",
     f"wss://api.{SPATIALREAL_REGION}.spatialwalk.cloud/v2/driveningress",
 )
-# Public (unauthenticated) character metadata endpoint, used to verify an
-# avatar id exists before adding it to the org's avatar library. The AvatarKit
-# SDK resolves characters through the region-agnostic `intl` host.
+# Character metadata endpoint, used to verify an avatar id exists before
+# adding it to the org's avatar library and at session time. On the new
+# platform it requires the X-API-KEY header.
 SPATIALREAL_CHARACTER_ENDPOINT = os.getenv(
     "SPATIALREAL_CHARACTER_ENDPOINT",
-    "https://api.intl.spatialwalk.cloud/v2/character",
+    "https://api.spatialreal.cloud/v2/character",
 )
 # Max concurrent host-mode avatar sessions. Beyond the cap new runs proceed
 # audio-only (the avatar is refused, never the call).
