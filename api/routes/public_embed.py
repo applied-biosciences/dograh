@@ -638,7 +638,7 @@ async def create_public_avatar_session(
     import time as _time
 
     from api.constants import SPATIALREAL_APP_ID
-    from api.routes.avatar import mint_spatialreal_token
+    from api.routes.avatar import mint_spatialreal_token, resolve_servable_avatar_id
 
     origin = get_request_origin(request)
     settings = await _resolve_avatar_settings_for_embed(session_token, origin)
@@ -651,7 +651,7 @@ async def create_public_avatar_session(
         _allow_embed_origin(response, origin)
     return {
         "app_id": SPATIALREAL_APP_ID,
-        "avatar_id": settings["avatar_id"],
+        "avatar_id": await resolve_servable_avatar_id(settings["avatar_id"]),
         "session_token": spatialreal_token,
         "expires_at": expires_at,
     }

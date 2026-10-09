@@ -217,6 +217,34 @@ class TestDeleteAvatar:
         response = client.delete(f"/avatar/library/{VALID_NEW_ID}")
         assert response.status_code == 404
 
+    def test_session_fallback_for_unknown_avatar(self, client, monkeypatch):
+        import asyncio
+
+        avatar_routes._EXISTS_CACHE.clear()
+        FakeAsyncClient.payload = {
+            "errors": [{"code": "NOT_FOUND", "detail": "avatar not found"}]
+        }
+        resolved = asyncio.get_event_loop().run_until_complete(
+            avatar_routes.resolve_servable_avatar_id(VALID_NEW_ID)
+        )
+        assert resolved == "avatar-env"
+
+        # Known avatar is kept.
+        avatar_routes._EXISTS_CACHE.clear()
+        FakeAsyncClient.payload = {"characterId": VALID_NEW_ID}
+        resolved = asyncio.get_event_loop().run_until_complete(
+            avatar_routes.resolve_servable_avatar_id(VALID_NEW_ID)
+        )
+        assert resolved == VALID_NEW_ID
+
+        # The env default short-circuits without a lookup.
+        FakeAsyncClient.calls = []
+        resolved = asyncio.get_event_loop().run_until_complete(
+            avatar_routes.resolve_servable_avatar_id(None)
+        )
+        assert resolved == "avatar-env"
+        assert FakeAsyncClient.calls == []
+
     def test_legacy_list_store_still_reads(self, client):
         client.store[(7, "avatar_library")] = [
             {"avatar_id": VALID_NEW_ID, "name": "Omani Male"}

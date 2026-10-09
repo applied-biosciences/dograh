@@ -155,7 +155,7 @@ async def create_avatar_session(
     logger.debug(f"Minted SpatialReal session token for user {user.id}")
     return AvatarSessionResponse(
         app_id=SPATIALREAL_APP_ID,
-        avatar_id=settings["avatar_id"] or SPATIALREAL_AVATAR_ID,
+        avatar_id=await resolve_servable_avatar_id(settings["avatar_id"]),
         session_token=session_token,
         expires_at=expires_at,
     )
@@ -246,6 +246,50 @@ async def _verify_avatar_exists(avatar_id: str) -> None:
                 "SpatialReal Studio and make sure the avatar shows Completed."
             ),
         )
+
+
+# Session-time existence checks, cached so repeated calls with the same
+# avatar don't re-hit SpatialReal. (avatar_id -> (exists, checked_at))
+_EXISTS_CACHE: dict[str, tuple[bool, float]] = {}
+_EXISTS_CACHE_TTL = 600.0
+
+
+async def resolve_servable_avatar_id(avatar_id: str | None) -> str:
+    """Return an avatar id that the serving backend actually has.
+
+    A workflow can point at an avatar that SpatialReal's serving API doesn't
+    know (deleted in Studio, or created on a backend this deployment isn't
+    connected to). Serving that id would leave the call with a blank avatar
+    panel, so fall back to the deployment default instead.
+    """
+    candidate = avatar_id or SPATIALREAL_AVATAR_ID
+    if not candidate or candidate == SPATIALREAL_AVATAR_ID:
+        return candidate
+
+    now = time.time()
+    cached = _EXISTS_CACHE.get(candidate)
+    if cached and now - cached[1] < _EXISTS_CACHE_TTL:
+        exists = cached[0]
+    else:
+        endpoint = f"{SPATIALREAL_CHARACTER_ENDPOINT.rstrip('/')}/{candidate}"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(endpoint)
+            data = response.json()
+            exists = bool(data.get("characterId")) and not data.get("errors")
+        except (httpx.HTTPError, ValueError):
+            # Can't verify — serve the configured id rather than silently
+            # overriding the operator's choice on a transient failure.
+            return candidate
+        _EXISTS_CACHE[candidate] = (exists, now)
+
+    if exists:
+        return candidate
+    logger.warning(
+        f"Avatar {candidate} not found on the serving backend; "
+        f"falling back to default {SPATIALREAL_AVATAR_ID!r}"
+    )
+    return SPATIALREAL_AVATAR_ID
 
 
 @router.get("/library", response_model=AvatarLibraryResponse)
