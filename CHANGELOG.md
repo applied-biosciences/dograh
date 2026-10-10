@@ -1,3 +1,17 @@
+# v1.48.0.0 (2026-10-10)
+
+- Create the CALMOS Connect white-label release branch from v1.47.0.31 and
+  synchronize the API, UI, lockfile, Compose image tags, and release metadata
+  to `1.48.0.0`.
+- Port the isolated Dograh HQ 1.48.0 Azure Speech configuration addition for
+  the `canadacentral` region.
+- Audit the Dograh HQ `dograh-v1.47.0..dograh-v1.48.0` delta against the fork.
+  Runtime, Pipecat, workflow, telephony, storage, generated-contract, billing,
+  MCP call-history, and dependency changes were intentionally not imported
+  where they overlapped or could affect CALMOS behavior.
+- Preserve the v1.47.0.31 Sakinah continuity, privacy, persistence, and
+  deployment behavior. No database migration is included.
+
 # v1.47.0.31 (2026-10-10)
 
 - Add optional recognised-caller continuity without a PIN. When

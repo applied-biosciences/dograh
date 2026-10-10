@@ -1,6 +1,6 @@
 # Dograh AI
 
-> **CALMOS Connect white-label v1.46.0.5** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): this fork adds the Sakinah Scenario Console, AI-to-AI simulation, durable call storage, privacy-controlled memory, scenario search, and inbound WhatsApp Business calling — see [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
+> **CALMOS Connect white-label v1.48.0.0** ([applied-biosciences/dograh](https://github.com/applied-biosciences/dograh)): this fork adds the Sakinah Scenario Console, AI-to-AI simulation, durable call storage, privacy-controlled memory, scenario search, and inbound WhatsApp Business calling — see [`SAKINAH.md`](SAKINAH.md) and [`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
 > **Deployment limitation**: run the API with a **single worker** (`FASTAPI_WORKERS=1`, the default). Simulations keep in-process state, so with multiple workers the simulation status/stop endpoints and the transcript/audio WebSockets intermittently land on a worker that doesn't own the simulation ([#4](https://github.com/applied-biosciences/dograh/issues/4)).
 
 <p align="center">
@@ -130,10 +130,10 @@ curl -o docker-compose.yaml https://raw.githubusercontent.com/dograh-hq/dograh/m
 
 ## CALMOS / Sakinah Scenario Console
 
-CALMOS Connect v1.47.0.31 includes the Sakinah Scenario Console at `/sakinah` and
+CALMOS Connect v1.48.0.0 includes the Sakinah Scenario Console at `/sakinah` and
 its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
 
-- v1.47.0.31 adds optional recognised-caller continuity without a PIN. With
+- v1.48.0.0 carries forward optional recognised-caller continuity without a PIN. With
   `SAKINAH_RECOGNISED_CONTINUITY=true` and `SAKINAH_PIN_ENABLED=false`, Sakinah
   can open with a short reference to the last eligible call. The reference is
   generated as a bounded AI summary of general topics; declined calls,
@@ -183,9 +183,9 @@ its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
   based on its artifact replication records.
 - Configure recognised-caller continuity with
   `SAKINAH_RECOGNISED_CONTINUITY` (default `false`). The checked-in
-  `docker-compose.override.yaml` enables the v1.47.0.31 live values, disables
+  `docker-compose.override.yaml` enables the v1.48.0.0 live values, disables
   the PIN gate for this release, preserves `MEMORY_RECOGNISED_MAY_REFERENCE=true`,
-  and pins the API/UI images to `1.47.0.31`. Keep the base Compose defaults
+  and pins the API/UI images to `1.48.0.0`. Keep the base Compose defaults
   when continuity is not wanted.
 - The continuity lifecycle is: first call → memory consent → post-call memory
   write → optional DTMF PIN enrollment; return call → possible caller
@@ -272,7 +272,7 @@ you intend to erase local call records and recordings.
 ### Self-Hosted Deployment
 
 For detailed deployment instructions including remote server setup with HTTPS, see our [Docker Deployment Guide](https://docs.dograh.com/deployment/docker#option-2-remote-server-deployment).
-For the CALMOS Connect v1.46.0.4.2.D data model, AWS storage configuration, memory
+For the CALMOS Connect v1.48.0.0 data model, AWS storage configuration, memory
 privacy flow, replay flow, migrations, and rollback procedure, see
 [`docs/developer/calmos-connect-v1.46.0.3.mdx`](docs/developer/calmos-connect-v1.46.0.3.mdx).
 

@@ -1,9 +1,9 @@
-# v1.47.0.31 live Sakinah continuity settings.
+# v1.48.0.0 live Sakinah continuity settings.
 # Keep secrets in the deployment .env; these values are intentionally limited
 # to feature switches and the immutable release image tags.
 services:
   api:
-    image: ${REGISTRY:-dograhai}/dograh-api:1.47.0.31
+    image: ${REGISTRY:-dograhai}/dograh-api:1.48.0.0
     environment:
       MEMORY_RECOGNISED_MAY_REFERENCE: "true"
       MEMORY_WORKFLOW_NAMES: "Sakinah Decision Agent v2,CALM - inbound,Sakinah Scenario Console,Sakinah Decision Agent v3.1,Sakinah Decision Agent v4.1"
@@ -11,4 +11,4 @@ services:
       SAKINAH_RECOGNISED_CONTINUITY: "true"
 
   ui:
-    image: ${REGISTRY:-dograhai}/dograh-ui:1.47.0.31
+    image: ${REGISTRY:-dograhai}/dograh-ui:1.48.0.0
