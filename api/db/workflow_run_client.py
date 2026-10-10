@@ -2,7 +2,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import func, or_
+from sqlalchemy import cast, func, or_
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.future import select
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -46,6 +47,8 @@ class WorkflowRunClient(BaseDBClient):
     ) -> list[WorkflowRunModel]:
         """Return the two newest completed, non-empty calls for one identity."""
         async with self.async_session() as session:
+            extra_jsonb = cast(WorkflowRunModel.extra, JSONB)
+            gathered_context_jsonb = cast(WorkflowRunModel.gathered_context, JSONB)
             result = await session.execute(
                 select(WorkflowRunModel)
                 .join(WorkflowModel, WorkflowModel.id == WorkflowRunModel.workflow_id)
@@ -55,6 +58,13 @@ class WorkflowRunClient(BaseDBClient):
                     WorkflowRunModel.is_completed.is_(True),
                     WorkflowRunModel.started_at.is_not(None),
                     WorkflowModel.organization_id == organization_id,
+                    extra_jsonb.op("?")("continuity_summary"),
+                    or_(
+                        gathered_context_jsonb.op("->>")("memory_consent").is_(None),
+                        func.lower(
+                            gathered_context_jsonb.op("->>")("memory_consent")
+                        ).notin_(("false", "no", "0")),
+                    ),
                     or_(
                         WorkflowRunModel.call_status.is_(None),
                         WorkflowRunModel.call_status.notin_(

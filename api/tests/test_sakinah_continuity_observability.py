@@ -5,12 +5,102 @@ from unittest.mock import AsyncMock
 import pytest
 
 from api.db.call_persistence_client import CallerIdentityResolution
+from api.services.pipecat import run_pipeline as run_pipeline_module
 from api.services.pipecat.realtime_feedback_events import (
     build_sakinah_continuity_action_event,
 )
 from api.services.sakinah import continuity
 from api.services.sakinah.pin_runtime import SakinahIdentityRuntime
 from api.utils.transcript import generate_transcript_text
+
+
+@pytest.mark.asyncio
+async def test_recognised_continuity_uses_ai_summary_and_unverified_memory_scope(
+    monkeypatch,
+):
+    run = SimpleNamespace(
+        id=9,
+        started_at=datetime(2026, 10, 10, tzinfo=UTC),
+        ended_at=datetime(2026, 10, 10, 0, 5, tzinfo=UTC),
+        full_transcript="caller: raw private transcript",
+        extra={
+            "continuity_summary": {
+                "summary": "We talked about work and next steps.",
+                "source_workflow_run_id": 9,
+            }
+        },
+    )
+    calls = []
+
+    class ContinuityDB:
+        async def is_memory_permitted(self, *_args, **_kwargs):
+            return True
+
+        async def get_last_two_eligible_previous_calls(self, **_kwargs):
+            return [run]
+
+        async def get_permitted_memories(self, *_args, **kwargs):
+            calls.append(kwargs)
+            return [
+                {
+                    "memory_type": "preference",
+                    "memory_text": "Caller prefers morning calls",
+                    "internal_context_allowed": True,
+                    "verbal_reference_allowed": True,
+                    "explicit_detail_allowed": False,
+                    "sensitivity": "normal",
+                }
+            ]
+
+    monkeypatch.setattr(continuity, "db_client", ContinuityDB())
+
+    context = await continuity.retrieve_bounded_continuity(
+        organization_id=7,
+        service_user_id="service-user",
+        current_run_id=10,
+        verified=False,
+    )
+
+    assert context["previous_calls"][0]["summary"] == (
+        "We talked about work and next steps."
+    )
+    assert "raw private transcript" not in continuity.bounded_continuity_prompt(context)
+    assert calls == [{"verified": False, "limit": continuity.MEMORY_MAX_RESULTS}]
+
+
+@pytest.mark.asyncio
+async def test_recognised_pipeline_context_includes_last_call_summary(monkeypatch):
+    monkeypatch.setattr(run_pipeline_module, "SAKINAH_RECOGNISED_CONTINUITY", True)
+    monkeypatch.setattr(run_pipeline_module, "SAKINAH_PIN_ENABLED", False)
+    monkeypatch.setattr(
+        run_pipeline_module,
+        "retrieve_bounded_continuity",
+        AsyncMock(
+            return_value={
+                "continuity_available": True,
+                "previous_calls": [{"summary": "We talked about work."}],
+                "durable_facts": [],
+            }
+        ),
+    )
+
+    result = await run_pipeline_module._load_recognised_continuity_context(
+        identity_context={
+            "caller_status": "RECOGNISED",
+            "service_user_id": "service-user",
+        },
+        organization_id=7,
+        current_run_id=10,
+    )
+
+    assert result["last_call_summary"] == "We talked about work."
+    assert "sakinah_continuity_context" in result["memory_context"]
+    run_pipeline_module.retrieve_bounded_continuity.assert_awaited_once_with(
+        organization_id=7,
+        service_user_id="service-user",
+        current_run_id=10,
+        verified=False,
+    )
 
 
 def _identity_db(*, created: bool):

@@ -149,7 +149,7 @@ def _redact_numeric_runs(text: str) -> str:
     return _DIGIT_RUN.sub("[redacted]", text)
 
 
-def _summary_for_run(run: Any, fallback_utterances: list[Any] | None = None) -> str:
+def _summary_for_run(run: Any) -> str:
     extra = run.extra if isinstance(run.extra, dict) else {}
     existing = extra.get("continuity_summary")
     if isinstance(existing, dict):
@@ -158,20 +158,7 @@ def _summary_for_run(run: Any, fallback_utterances: list[Any] | None = None) -> 
         summary = existing
     if isinstance(summary, str) and summary.strip():
         return _redact_numeric_runs(summary.strip())[:1_200]
-    transcript = str(run.full_transcript or "")
-    if not transcript and fallback_utterances:
-        transcript = "\n".join(
-            f"{item.speaker}: {item.transcript}"
-            for item in fallback_utterances
-            if getattr(item, "transcript", None)
-        )
-    caller_lines = [
-        re.sub(r"^\s*(?:user|caller|service user):\s*", "", line.strip(), flags=re.IGNORECASE)
-        for line in transcript.splitlines()
-        if line.strip().lower().startswith(("user:", "caller:", "service user:"))
-    ]
-    summary = " ".join(caller_lines)
-    return _redact_numeric_runs(summary)[:1_200]
+    return ""
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -181,7 +168,6 @@ def _iso(value: datetime | None) -> str | None:
 def build_bounded_continuity_context(
     previous_runs: list[Any],
     memories: list[dict[str, Any]],
-    utterances_by_run: dict[int, list[Any]] | None = None,
 ) -> dict[str, Any]:
     """Create a bounded prompt object, never including raw transcripts."""
     return {
@@ -191,9 +177,7 @@ def build_bounded_continuity_context(
                 "workflow_run_id": run.id,
                 "started_at": _iso(run.started_at),
                 "completed_at": _iso(getattr(run, "ended_at", None)),
-                "summary": _summary_for_run(
-                    run, (utterances_by_run or {}).get(run.id)
-                ),
+                "summary": _summary_for_run(run),
             }
             for run in previous_runs[:2]
         ],
@@ -249,6 +233,7 @@ async def retrieve_bounded_continuity(
     organization_id: int,
     service_user_id: str,
     current_run_id: int,
+    verified: bool = True,
 ) -> dict[str, Any]:
     """Fetch exactly the permitted previous calls and bounded active memories."""
     logger.bind(event="continuity_retrieval_started").info(
@@ -281,18 +266,12 @@ async def retrieve_bounded_continuity(
             service_user_id=service_user_id,
             current_run_id=current_run_id,
         )
-        utterances_by_run = {}
-        for run in previous_runs:
-            if not run.full_transcript:
-                utterances_by_run[run.id] = await db_client.get_utterances_for_run(run.id)
         memories = await db_client.get_permitted_memories(
             service_user_id,
-            verified=True,
+            verified=verified,
             limit=MEMORY_MAX_RESULTS,
         )
-        bounded = build_bounded_continuity_context(
-            previous_runs, memories, utterances_by_run
-        )
+        bounded = build_bounded_continuity_context(previous_runs, memories)
         bounded["continuity_available"] = bool(
             bounded["previous_calls"] or bounded["durable_facts"]
         )
@@ -351,7 +330,7 @@ async def retrieve_bounded_continuity(
 
 
 async def persist_continuity_summary(workflow_run_id: int, *, client: Any = None) -> None:
-    """Persist a compact caller-focused summary after transcript persistence."""
+    """Retain compatibility with the old post-call hook without raw fallback."""
     persistence_client = client or db_client
     if not hasattr(persistence_client, "update_workflow_run"):
         return
@@ -366,18 +345,9 @@ async def persist_continuity_summary(workflow_run_id: int, *, client: Any = None
             )
         ):
             return
-        summary = _summary_for_run(run)
-        if not summary:
+        extra = run.extra if isinstance(run.extra, dict) else {}
+        if extra.get("continuity_summary"):
             return
-        await persistence_client.update_workflow_run(
-            workflow_run_id,
-            extra={
-                "continuity_summary": {
-                    "summary": f"Caller discussed: {summary}",
-                    "source_workflow_run_id": workflow_run_id,
-                }
-            },
-        )
     except Exception as exc:  # noqa: BLE001 - summary is optional enrichment
         logger.bind(event="continuity_summary_failed").warning(
             "Unable to persist Sakinah continuity summary error_class={}",

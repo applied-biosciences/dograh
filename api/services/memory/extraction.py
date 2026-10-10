@@ -86,6 +86,50 @@ def _parse_proposals(raw: str | None) -> list[dict[str, Any]]:
     return parsed if isinstance(parsed, list) else []
 
 
+def _parse_extraction_response(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        parsed = parse_llm_json(raw)
+    except Exception:  # noqa: BLE001 - tolerate provider-specific JSON wrappers
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _call_summary_from_response(raw: str | None) -> str:
+    summary = _parse_extraction_response(raw).get("call_summary")
+    if not isinstance(summary, str):
+        return ""
+    # Keep the persisted value bounded and remove long numeric runs even if a
+    # provider ignores the prompt's privacy constraints.
+    summary = re.sub(r"\b\d+\b", "[redacted]", " ".join(summary.split()))
+    return summary[:1_200]
+
+
+async def _persist_call_summary(run: Any, raw: str | None) -> None:
+    summary = _call_summary_from_response(raw)
+    if not summary or not hasattr(db_client, "update_workflow_run"):
+        return
+    existing_extra = run.extra if isinstance(run.extra, dict) else {}
+    if existing_extra.get("continuity_summary"):
+        return
+    try:
+        await db_client.update_workflow_run(
+            run.id,
+            extra={
+                "continuity_summary": {
+                    "summary": summary,
+                    "source_workflow_run_id": run.id,
+                }
+            },
+        )
+    except Exception:  # noqa: BLE001 - summary is optional post-call enrichment
+        logger.warning("Call summary could not be persisted")
+
+
 def _memory_storage_allowed(raw: str | None) -> bool | None:
     """Return only an explicit model-classified opt-out/permission value."""
     if not raw:
@@ -238,22 +282,23 @@ async def extract_and_store_memories(workflow_run_id: int) -> int:
     if gathered.get("profile_binding_status") == "unverified_existing":
         return 0
     consent = _as_bool(gathered.get("memory_consent"))
-    if consent is not None:
+    if consent is True:
         try:
-            await db_client.record_privacy_permission(
-                organization_id=run.workflow.organization_id,
-                service_user_id=run.service_user_id,
-                permission_type="memory_storage",
-                granted=consent,
-                verification_level=(
-                    "verified" if run.caller_state == "VERIFIED" else "none"
-                ),
-                source_workflow_run_id=run.id,
-            )
+            for permission_type in ("memory_storage", "memory_use"):
+                await db_client.record_privacy_permission(
+                    organization_id=run.workflow.organization_id,
+                    service_user_id=run.service_user_id,
+                    permission_type=permission_type,
+                    granted=True,
+                    verification_level=(
+                        "verified" if run.caller_state == "VERIFIED" else "none"
+                    ),
+                    source_workflow_run_id=run.id,
+                )
         except Exception:  # noqa: BLE001 - post-call failure must not affect the call
             logger.warning("Memory consent could not be recorded")
             return 0
-    if not await db_client.is_memory_permitted(
+    if consent is not False and not await db_client.is_memory_permitted(
         run.service_user_id, permission_type="memory_storage"
     ):
         return 0
@@ -267,6 +312,11 @@ async def extract_and_store_memories(workflow_run_id: int) -> int:
             await _record_memory_opt_out(run)
         except Exception:  # noqa: BLE001 - post-call failure must not affect the call
             logger.warning("Memory opt-out could not be persisted for completed call")
+        return 0
+
+    if consent is False:
+        # Caller declined for this call only: store nothing from it. A later
+        # explicit yes is allowed to re-enable saving and recall.
         return 0
 
     resolved = await get_resolved_ai_model_configuration(
@@ -284,7 +334,11 @@ async def extract_and_store_memories(workflow_run_id: int) -> int:
         "field to be true and must reflect explicit caller words. "
         "If the caller explicitly asks not to be remembered, set "
         "memory_storage_allowed to false. "
-        'Return JSON only: {"memory_storage_allowed":boolean,"memories":['
+        'Also return "call_summary": one or two plain sentences written to the '
+        'caller ("we talked about...") naming general topics only. Do not include '
+        'health conditions, medication, risk, names of other people, places, '
+        'numbers, or quotes. Use an empty string if nothing is suitable. '
+        'Return JSON only: {"memory_storage_allowed":boolean,"call_summary":string,"memories":['
             '{"memory_text":string,"memory_type":string,'
             '"fact_key":string|null,"fact_category":string|null,"caller_stated":boolean,'
         '"importance":number,"confidence":number,"sensitivity":"low"|"normal"|"high"|"restricted",'
@@ -308,6 +362,8 @@ async def extract_and_store_memories(workflow_run_id: int) -> int:
         except Exception:  # noqa: BLE001 - post-call failure must not affect the call
             logger.warning("Memory opt-out could not be persisted for completed call")
         return 0
+
+    await _persist_call_summary(run, raw)
 
     proposals = [
         item

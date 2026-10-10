@@ -548,6 +548,7 @@ class SakinahIdentityRuntime:
                         organization_id=self.organization_id,
                         service_user_id=self.service_user_id,
                         current_run_id=self.engine._workflow_run_id,
+                        verified=True,
                     )
                 except Exception as exc:  # noqa: BLE001 - continuity is optional
                     logger.warning(

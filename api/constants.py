@@ -186,6 +186,9 @@ def _bounded_int_setting(name: str, default: int, minimum: int, maximum: int) ->
 
 
 SAKINAH_PIN_ENABLED = os.getenv("SAKINAH_PIN_ENABLED", "true").lower() == "true"
+SAKINAH_RECOGNISED_CONTINUITY = (
+    os.getenv("SAKINAH_RECOGNISED_CONTINUITY", "false").lower() == "true"
+)
 SAKINAH_PIN_LENGTH = _bounded_int_setting("SAKINAH_PIN_LENGTH", 4, 4, 12)
 SAKINAH_PIN_MAX_ATTEMPTS = _bounded_int_setting(
     "SAKINAH_PIN_MAX_ATTEMPTS", 5, 1, 20

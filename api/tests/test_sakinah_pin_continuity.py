@@ -63,13 +63,10 @@ def test_bounded_context_excludes_raw_transcripts_and_limits_calls():
     assert len(bounded_continuity_prompt(context)) <= 8_600
 
 
-def test_bounded_context_can_summarise_persisted_utterance_fallback():
+def test_bounded_context_does_not_fallback_to_persisted_utterances():
     run = SimpleNamespace(id=7, started_at=None, full_transcript=None, extra={})
-    utterance = SimpleNamespace(speaker="caller", transcript="Caller needs follow-up")
-    context = build_bounded_continuity_context(
-        [run], [], {7: [utterance]}
-    )
-    assert context["previous_calls"][0]["summary"] == "Caller needs follow-up"
+    context = build_bounded_continuity_context([run], [])
+    assert context["previous_calls"][0]["summary"] == ""
 
 
 @pytest.mark.asyncio
@@ -230,7 +227,10 @@ async def test_continue_records_gate_and_retrieves_bounded_context(monkeypatch):
     await runtime.handle_user_text("continue")
 
     retrieve.assert_awaited_once_with(
-        organization_id=7, service_user_id="service-user", current_run_id=101
+        organization_id=7,
+        service_user_id="service-user",
+        current_run_id=101,
+        verified=True,
     )
     assert runtime.state == "CONTINUITY_AUTHORISED"
     private = engine.update_sakinah_security_state.await_args.kwargs["private_context"]

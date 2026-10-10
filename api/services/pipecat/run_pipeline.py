@@ -4,6 +4,7 @@ from typing import Optional
 from fastapi import HTTPException
 from loguru import logger
 
+from api.constants import SAKINAH_PIN_ENABLED, SAKINAH_RECOGNISED_CONTINUITY
 from api.db import db_client
 from api.enums import WorkflowRunMode
 from api.errors.failure import mark_failure_reported
@@ -79,9 +80,11 @@ from api.services.pipecat.transport_setup import create_webrtc_transport
 from api.services.pipecat.worker_runner import run_pipeline_worker
 from api.services.pipecat.ws_sender_registry import get_ws_sender
 from api.services.sakinah.continuity import (
+    bounded_continuity_prompt,
     internal_reference,
     is_continuity_workflow,
     prepare_sakinah_identity,
+    retrieve_bounded_continuity,
 )
 from api.services.sakinah.pin_runtime import (
     SakinahIdentityOutputObserver,
@@ -135,6 +138,41 @@ ensure_tracing()
 
 DEFAULT_USER_TURN_STOP_TIMEOUT = 5.0
 EXTERNAL_TURN_USER_STOP_TIMEOUT = 30.0
+
+
+async def _load_recognised_continuity_context(
+    *,
+    identity_context: dict,
+    organization_id: int,
+    current_run_id: int,
+) -> dict[str, str]:
+    """Load optional safe continuity for recognised callers without a PIN."""
+    result = {"memory_context": "", "last_call_summary": ""}
+    if not (
+        SAKINAH_RECOGNISED_CONTINUITY
+        and not SAKINAH_PIN_ENABLED
+        and identity_context.get("caller_status") == "RECOGNISED"
+        and identity_context.get("service_user_id")
+    ):
+        return result
+    try:
+        context = await asyncio.wait_for(
+            retrieve_bounded_continuity(
+                organization_id=organization_id,
+                service_user_id=identity_context["service_user_id"],
+                current_run_id=current_run_id,
+                verified=False,
+            ),
+            timeout=2.0,
+        )
+        if context.get("continuity_available"):
+            result["memory_context"] = bounded_continuity_prompt(context)
+            calls = context.get("previous_calls") or []
+            if calls:
+                result["last_call_summary"] = calls[0]["summary"]
+    except Exception:  # noqa: BLE001 - continuity is optional call-start enrichment
+        logger.warning("Recognised-caller continuity unavailable; continuing fresh")
+    return result
 
 
 def _resolve_user_turn_stop_timeout(
@@ -770,6 +808,19 @@ async def _run_pipeline_impl(
                 for key, value in sakinah_identity_context.items()
                 if key != "service_user_id" or value is not None
             }
+        )
+        merged_call_context_vars["last_call_summary"] = ""
+        recognised_continuity_context = await _load_recognised_continuity_context(
+            identity_context=sakinah_identity_context,
+            organization_id=workflow.organization_id,
+            current_run_id=workflow_run_id,
+        )
+        if recognised_continuity_context["memory_context"]:
+            merged_call_context_vars["memory_context"] = (
+                recognised_continuity_context["memory_context"]
+            )
+        merged_call_context_vars["last_call_summary"] = (
+            recognised_continuity_context["last_call_summary"]
         )
         if sakinah_identity_context.get("service_user_id"):
             try:

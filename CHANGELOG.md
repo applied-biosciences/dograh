@@ -1,3 +1,16 @@
+# v1.47.0.31 (2026-10-10)
+
+- Add optional recognised-caller continuity without a PIN. When
+  `SAKINAH_RECOGNISED_CONTINUITY=true` and PIN gating is disabled, the call-start
+  context contains only the two newest eligible calls with an AI-generated,
+  general-topic summary plus permitted low/normal memories.
+- Treat a caller's `no` memory answer as a refusal for that call only. A later
+  `yes` re-enables both memory saving and recall; explicit “forget me” requests
+  remain permanent opt-outs until the caller says yes again.
+- Never use declined calls or raw transcript text for continuity. Add the
+  `SAKINAH_RECOGNISED_CONTINUITY` Compose setting, bump release metadata, and
+  document the v1.47.0.31 smoke coverage. No database migration is included.
+
 # v1.47.0.30 (2026-10-09)
 
 - Add the disabled-by-default `MEMORY_RECOGNISED_MAY_REFERENCE` setting. When

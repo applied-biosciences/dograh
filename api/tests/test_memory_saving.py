@@ -64,7 +64,7 @@ def saving(monkeypatch):
     run = SimpleNamespace(
         id=44, service_user_id="test-service-user", caller_state="FIRST_TIME",
         workflow=SimpleNamespace(name="Sakinah Scenario Console", organization_id=7),
-        gathered_context={}, full_transcript="USER: I enjoy gardening.", logs={},
+        gathered_context={}, full_transcript="USER: I enjoy gardening.", logs={}, extra={},
     )
     user = SimpleNamespace(memory_enabled=True, status="active")
     state = SimpleNamespace(permission=None)
@@ -98,6 +98,7 @@ def saving(monkeypatch):
     db = SimpleNamespace(
         get_workflow_run_by_id=AsyncMock(return_value=run),
         record_privacy_permission=AsyncMock(side_effect=record_permission),
+        update_workflow_run=AsyncMock(),
         is_memory_permitted=AsyncMock(side_effect=permitted),
         get_utterances_for_run=AsyncMock(return_value=[]),
         record_memory_opt_out=AsyncMock(side_effect=opt_out),
@@ -105,7 +106,7 @@ def saving(monkeypatch):
         persist_call_snapshot=AsyncMock(),
     )
     llm = SimpleNamespace(run_inference=AsyncMock(return_value=(
-        '{"memory_storage_allowed":true,"memories":['
+        '{"memory_storage_allowed":true,"call_summary":"We talked about gardening.","memories":['
         '{"memory_type":"preference","memory_text":"Enjoys gardening"}]}'
     )))
     monkeypatch.setattr(extraction, "MEMORY_ENABLED", True)
@@ -156,11 +157,19 @@ async def test_consent_and_existing_permission(saving, monkeypatch, consent, exi
     if extraction._as_bool(consent) is None:
         saving.db.record_privacy_permission.assert_not_awaited()
         assert saving.events == ["permission"]
+    elif extraction._as_bool(consent) is False:
+        saving.db.record_privacy_permission.assert_not_awaited()
+        assert saving.events == []
     else:
-        assert saving.events == ["consent", "permission"]
-        saving.db.record_privacy_permission.assert_awaited_once_with(
+        assert saving.events == ["consent", "consent", "permission"]
+        assert saving.db.record_privacy_permission.await_count == 2
+        assert [
+            call.kwargs["permission_type"]
+            for call in saving.db.record_privacy_permission.await_args_list
+        ] == ["memory_storage", "memory_use"]
+        saving.db.record_privacy_permission.assert_any_await(
             organization_id=7, service_user_id="test-service-user",
-            permission_type="memory_storage", granted=extraction._as_bool(consent),
+            permission_type="memory_storage", granted=True,
             verification_level="none", source_workflow_run_id=44,
         )
     if not expected:
@@ -173,6 +182,35 @@ async def test_verified_consent_provenance(saving):
     saving.run.gathered_context = {"memory_consent": True}
     assert await extraction.extract_and_store_memories(44) == 1
     assert saving.db.record_privacy_permission.call_args.kwargs["verification_level"] == "verified"
+
+
+@pytest.mark.asyncio
+async def test_ai_call_summary_is_saved_without_raw_transcript_fallback(saving):
+    saving.run.extra = {"existing": "value"}
+
+    assert await extraction.extract_and_store_memories(44) == 1
+
+    saving.db.update_workflow_run.assert_awaited_once_with(
+        44,
+        extra={
+            "continuity_summary": {
+                "summary": "We talked about gardening.",
+                "source_workflow_run_id": 44,
+            }
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_declined_call_is_not_sent_for_memory_extraction(saving):
+    saving.run.gathered_context = {"memory_consent": False}
+
+    assert await extraction.extract_and_store_memories(44) == 0
+
+    saving.db.record_privacy_permission.assert_not_awaited()
+    saving.db.is_memory_permitted.assert_not_awaited()
+    saving.llm.run_inference.assert_not_awaited()
+    saving.db.update_workflow_run.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -217,7 +255,7 @@ async def test_consent_persistence_failure_stops_permission_and_extraction(savin
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("consent", [None, True])
+@pytest.mark.parametrize("consent", [None, False, True])
 async def test_mid_call_refusal_overrides_consent_before_saving(saving, consent):
     saving.run.gathered_context = {"memory_consent": consent}
     saving.run.full_transcript = "USER: I enjoy gardening.\nUSER: Please don’t remember this.\nASSISTANT: Understood."

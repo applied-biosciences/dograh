@@ -130,9 +130,18 @@ curl -o docker-compose.yaml https://raw.githubusercontent.com/dograh-hq/dograh/m
 
 ## CALMOS / Sakinah Scenario Console
 
-CALMOS Connect v1.47.0.30 includes the Sakinah Scenario Console at `/sakinah` and
+CALMOS Connect v1.47.0.31 includes the Sakinah Scenario Console at `/sakinah` and
 its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
 
+- v1.47.0.31 adds optional recognised-caller continuity without a PIN. With
+  `SAKINAH_RECOGNISED_CONTINUITY=true` and `SAKINAH_PIN_ENABLED=false`, Sakinah
+  can open with a short reference to the last eligible call. The reference is
+  generated as a bounded AI summary of general topics; declined calls,
+  transcripts, health details, names, places, numbers, and quotes are not used.
+- A `no` answer to “useful things from today” declines memory for that call only.
+  A later `yes` re-enables both memory saving and recall. Explicit “forget me” /
+  “never remember me” requests remain a permanent opt-out until the caller says
+  yes again.
 - The v1.47.0.29 amendment registers the supplied `Sakinah Decision Agent v3.1`
   and `Sakinah Decision Agent v4.1` definitions, preserving the existing memory
   workflow allow-list and the current server-side persistence behavior.
@@ -162,16 +171,22 @@ its AI-to-AI simulation console at `/sakinah/sim`. The white-label release adds:
   stable service-user identities, provenance, retention, and caller states
   (`UNKNOWN`, `FIRST_TIME`, `RECOGNISED`, `PIN_REQUIRED`, `VERIFIED`,
   `CONTINUITY_DECLINED`, and `CONTINUITY_AUTHORISED`).
-- Memory extraction now accepts the configured Sakinah workflows through
+- Memory extraction accepts the configured Sakinah workflows through
   `MEMORY_WORKFLOW_NAMES`. With `MEMORY_REQUIRE_EXPLICIT_CONSENT=false` (the
-  default), saving remains automatic unless the caller explicitly opts out;
-  consent answers are recorded as privacy permissions. This release saves
+  default), saving remains automatic unless the caller declines that call;
+  consent answers are recorded as privacy permissions. The release saves
   memories for future use but does not load them into calls pending PIN
   verification. v1.47.0.27 adds DTMF-only PIN enrollment/verification, temporary
   lockout protection, a separate Continue / Start Fresh choice, last-two-call
   retrieval, bounded continuity context, and longitudinal memory reconciliation.
   Run Details reports each run's S3 backup as copying, successful, or failed
   based on its artifact replication records.
+- Configure recognised-caller continuity with
+  `SAKINAH_RECOGNISED_CONTINUITY` (default `false`). The checked-in
+  `docker-compose.override.yaml` enables the v1.47.0.31 live values, disables
+  the PIN gate for this release, preserves `MEMORY_RECOGNISED_MAY_REFERENCE=true`,
+  and pins the API/UI images to `1.47.0.31`. Keep the base Compose defaults
+  when continuity is not wanted.
 - The continuity lifecycle is: first call → memory consent → post-call memory
   write → optional DTMF PIN enrollment; return call → possible caller
   recognition → backend PIN verification → Continue / Start Fresh → authorised
